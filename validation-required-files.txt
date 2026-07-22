@@ -1,0 +1,11 @@
+README.md
+AGENTS.md
+docs/contract.md
+docs/versioning.md
+docs/security.md
+examples/rust-caller.yml
+examples/python-caller.yml
+.github/workflows/reusable-rust-cargo-validate.yml
+.github/workflows/reusable-python-repository-validate.yml
+.github/workflows/validate.yml
+scripts/validate.py

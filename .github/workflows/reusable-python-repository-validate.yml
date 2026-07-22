@@ -1,0 +1,17 @@
+name: Reusable Python repository validate
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@v6
+      - name: Run repository validation authority
+        run: python scripts/validate.py

@@ -6,10 +6,10 @@ Shared workflows call repository-owned validation commands. They do not copy pro
 
 ## Reusable workflows
 
-- [`reusable-rust-cargo-validate.yml`](.github/workflows/reusable-rust-cargo-validate.yml) checks out the caller and runs `cargo validate`.
+- [`reusable-rust-cargo-validate.yml`](.github/workflows/reusable-rust-cargo-validate.yml) installs the maintained Rust toolchains, restores Cargo caches, and runs the caller's fixed `cargo +stable validate` authority with bounded failure diagnostics.
 - [`reusable-python-repository-validate.yml`](.github/workflows/reusable-python-repository-validate.yml) checks out the caller and runs `python scripts/validate.py`.
 
-Callers must pin an accepted immutable commit. Do not reference `main`.
+Callers own triggers, concurrency, and repository-specific branch rules. They must pin an accepted immutable commit and must not reference `main`.
 
 Canonical validation:
 

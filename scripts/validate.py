@@ -11,8 +11,27 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {".md", ".yml", ".yaml", ".txt", ".py"}
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
-USES_RE = re.compile(r"^\s*uses:\s*[^@\s]+@([^\s#]+)", re.MULTILINE)
 WRITE_PERMISSION_RE = re.compile(r"^\s+[a-zA-Z0-9_-]+:\s*write\s*$", re.MULTILINE)
+WORKFLOW_INPUT_RE = re.compile(r"^\s{4}(inputs|secrets):\s*$", re.MULTILINE)
+VALIDATE_COMMAND_RE = re.compile(r"^cargo(?:\s+\+[^\s]+)?\s+validate(?:\s|$)")
+
+RUST_WORKFLOW = ROOT / ".github" / "workflows" / "reusable-rust-cargo-validate.yml"
+EXPECTED_VALIDATE_COMMAND = "cargo +stable validate 2>&1 | tee validation.log"
+RUST_REQUIRED_FRAGMENTS = (
+    "uses: actions/checkout@v6",
+    "clean: true",
+    "fetch-depth: 1",
+    "rustup toolchain install stable --profile minimal --component rustfmt,clippy",
+    "rustup toolchain install 1.93.0 --profile minimal --component rustfmt,clippy",
+    "uses: Swatinem/rust-cache@v2",
+    "set -o pipefail",
+    EXPECTED_VALIDATE_COMMAND,
+    "if: failure()",
+    "uses: actions/upload-artifact@v7",
+    "retention-days: 3",
+    "if: always()",
+    "run: rm -f validation.log",
+)
 
 
 def fail(message: str, failures: list[str]) -> None:
@@ -71,7 +90,6 @@ def validate_workflows(failures: list[str]) -> None:
 
         if path.name.startswith("reusable-") and "workflow_call:" not in text:
             fail(f"{relative}: reusable workflow must declare workflow_call", failures)
-
         if "pull_request_target:" in text:
             fail(f"{relative}: pull_request_target is forbidden", failures)
         if "permissions: write-all" in text:
@@ -80,10 +98,41 @@ def validate_workflows(failures: list[str]) -> None:
             fail(f"{relative}: write permission is forbidden", failures)
         if "contents: read" not in text:
             fail(f"{relative}: must declare contents: read", failures)
+        if "continue-on-error:" in text:
+            fail(f"{relative}: continue-on-error is forbidden", failures)
 
-        for ref in USES_RE.findall(text):
+        for action, ref in re.findall(r"^\s*uses:\s*([^@\s]+)@([^\s#]+)", text, re.MULTILINE):
             if ref in {"main", "master"}:
                 fail(f"{relative}: action reference @{ref} is forbidden", failures)
+            if action == "actions/checkout" and ref != "v6":
+                fail(f"{relative}: actions/checkout must use @v6", failures)
+            if action == "actions/upload-artifact" and ref != "v7":
+                fail(f"{relative}: actions/upload-artifact must use @v7", failures)
+
+    if not RUST_WORKFLOW.is_file():
+        fail(f"{RUST_WORKFLOW.relative_to(ROOT)}: missing", failures)
+        return
+
+    rust_text = RUST_WORKFLOW.read_text(encoding="utf-8")
+    relative = RUST_WORKFLOW.relative_to(ROOT).as_posix()
+
+    for fragment in RUST_REQUIRED_FRAGMENTS:
+        if fragment not in rust_text:
+            fail(f"{relative}: missing required contract fragment: {fragment}", failures)
+
+    if WORKFLOW_INPUT_RE.search(rust_text):
+        fail(f"{relative}: inputs and secrets are forbidden for the fixed Rust profile", failures)
+
+    validate_commands = [
+        line.strip()
+        for line in rust_text.splitlines()
+        if VALIDATE_COMMAND_RE.match(line.strip())
+    ]
+    if validate_commands != [EXPECTED_VALIDATE_COMMAND]:
+        fail(
+            f"{relative}: expected exactly one fixed validation command, found {validate_commands}",
+            failures,
+        )
 
 
 def main() -> int:

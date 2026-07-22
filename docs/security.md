@@ -10,6 +10,7 @@ Current workflows:
 - do not perform deployment or release operations;
 - do not accept arbitrary command, script, toolchain, runner, or path inputs;
 - check out only the caller revision selected by the triggering workflow;
+- keep diagnostic files below `RUNNER_TEMP`, outside the caller checkout;
 - upload only the bounded validation log and only after failure;
 - use maintained action majors that are statically enforced by repository validation.
 

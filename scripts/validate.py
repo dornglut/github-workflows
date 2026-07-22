@@ -16,7 +16,9 @@ WORKFLOW_INPUT_RE = re.compile(r"^\s{4}(inputs|secrets):\s*$", re.MULTILINE)
 VALIDATE_COMMAND_RE = re.compile(r"^cargo(?:\s+\+[^\s]+)?\s+validate(?:\s|$)")
 
 RUST_WORKFLOW = ROOT / ".github" / "workflows" / "reusable-rust-cargo-validate.yml"
-EXPECTED_VALIDATE_COMMAND = "cargo +stable validate 2>&1 | tee validation.log"
+EXPECTED_VALIDATE_COMMAND = (
+    'cargo +stable validate 2>&1 | tee "${RUNNER_TEMP}/validation.log"'
+)
 RUST_REQUIRED_FRAGMENTS = (
     "uses: actions/checkout@v6",
     "clean: true",
@@ -28,8 +30,14 @@ RUST_REQUIRED_FRAGMENTS = (
     EXPECTED_VALIDATE_COMMAND,
     "if: failure()",
     "uses: actions/upload-artifact@v7",
+    "path: ${{ runner.temp }}/validation.log",
     "retention-days: 3",
     "if: always()",
+    'run: rm -f "${RUNNER_TEMP}/validation.log"',
+)
+FORBIDDEN_IN_CHECKOUT_DIAGNOSTICS = (
+    "tee validation.log",
+    "path: validation.log",
     "run: rm -f validation.log",
 )
 
@@ -119,6 +127,10 @@ def validate_workflows(failures: list[str]) -> None:
     for fragment in RUST_REQUIRED_FRAGMENTS:
         if fragment not in rust_text:
             fail(f"{relative}: missing required contract fragment: {fragment}", failures)
+
+    for fragment in FORBIDDEN_IN_CHECKOUT_DIAGNOSTICS:
+        if fragment in rust_text:
+            fail(f"{relative}: diagnostic path must remain outside checkout: {fragment}", failures)
 
     if WORKFLOW_INPUT_RE.search(rust_text):
         fail(f"{relative}: inputs and secrets are forbidden for the fixed Rust profile", failures)

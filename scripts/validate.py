@@ -11,7 +11,6 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {".md", ".yml", ".yaml", ".txt", ".py"}
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
-USES_RE = re.compile(r"^\s*uses:\s*[^@\s]+@([^\s#]+)", re.MULTILINE)
 WRITE_PERMISSION_RE = re.compile(r"^\s+[a-zA-Z0-9_-]+:\s*write\s*$", re.MULTILINE)
 WORKFLOW_INPUT_RE = re.compile(r"^\s{4}(inputs|secrets):\s*$", re.MULTILINE)
 

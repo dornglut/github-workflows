@@ -13,8 +13,10 @@ TEXT_SUFFIXES = {".md", ".yml", ".yaml", ".txt", ".py"}
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 WRITE_PERMISSION_RE = re.compile(r"^\s+[a-zA-Z0-9_-]+:\s*write\s*$", re.MULTILINE)
 WORKFLOW_INPUT_RE = re.compile(r"^\s{4}(inputs|secrets):\s*$", re.MULTILINE)
+VALIDATE_COMMAND_RE = re.compile(r"^cargo(?:\s+\+[^\s]+)?\s+validate(?:\s|$)")
 
 RUST_WORKFLOW = ROOT / ".github" / "workflows" / "reusable-rust-cargo-validate.yml"
+EXPECTED_VALIDATE_COMMAND = "cargo +stable validate 2>&1 | tee validation.log"
 RUST_REQUIRED_FRAGMENTS = (
     "uses: actions/checkout@v6",
     "clean: true",
@@ -23,7 +25,7 @@ RUST_REQUIRED_FRAGMENTS = (
     "rustup toolchain install 1.93.0 --profile minimal --component rustfmt,clippy",
     "uses: Swatinem/rust-cache@v2",
     "set -o pipefail",
-    "cargo +stable validate 2>&1 | tee validation.log",
+    EXPECTED_VALIDATE_COMMAND,
     "if: failure()",
     "uses: actions/upload-artifact@v7",
     "retention-days: 3",
@@ -120,10 +122,17 @@ def validate_workflows(failures: list[str]) -> None:
 
     if WORKFLOW_INPUT_RE.search(rust_text):
         fail(f"{relative}: inputs and secrets are forbidden for the fixed Rust profile", failures)
-    if rust_text.count("cargo +stable validate") != 1:
-        fail(f"{relative}: must invoke cargo +stable validate exactly once", failures)
-    if "cargo validate" in rust_text.replace("cargo +stable validate", ""):
-        fail(f"{relative}: alternate cargo validate invocation is forbidden", failures)
+
+    validate_commands = [
+        line.strip()
+        for line in rust_text.splitlines()
+        if VALIDATE_COMMAND_RE.match(line.strip())
+    ]
+    if validate_commands != [EXPECTED_VALIDATE_COMMAND]:
+        fail(
+            f"{relative}: expected exactly one fixed validation command, found {validate_commands}",
+            failures,
+        )
 
 
 def main() -> int:

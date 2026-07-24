@@ -5,7 +5,9 @@ docs/versioning.md
 docs/security.md
 examples/rust-caller.yml
 examples/python-caller.yml
+.github/dependabot.yml
 .github/workflows/reusable-rust-cargo-validate.yml
 .github/workflows/reusable-python-repository-validate.yml
 .github/workflows/validate.yml
 scripts/validate.py
+validation-required-files.txt

@@ -13,12 +13,21 @@ It must not:
 - accept an arbitrary command, script, toolchain, runner, or working-directory input;
 - hide validation failures or convert them into generated commits.
 
+## Dependency and checkout contract
+
+- every external Action is pinned to a full commit SHA;
+- the same line records the intended release tag for human review and Dependabot updates;
+- checkout uses a clean shallow fetch of the triggering caller revision;
+- checkout sets `persist-credentials: false`;
+- Action dependency updates arrive through reviewed pull requests;
+- a reusable-workflow revision remains immutable for existing callers.
+
 ## Rust validation profile
 
 The maintained Rust workflow has one fixed profile:
 
 - GitHub-hosted Ubuntu runner;
-- exact clean checkout with shallow history;
+- exact clean checkout with shallow history and no persisted credential;
 - stable Rust with `rustfmt` and `clippy`;
 - Rust 1.93.0 with `rustfmt` and `clippy` available for repository-owned MSRV checks;
 - Cargo caching;
@@ -27,5 +36,14 @@ The maintained Rust workflow has one fixed profile:
 - cleanup of the out-of-tree log on every result.
 
 The workflow supplies the environment required by the current Dornglut Rust repositories. The caller's `.cargo/config.toml`, `xtask`, lockfiles, tests, documentation checks, policy checks, and clean-state proof remain the validation authority.
+
+## Python documentation profile
+
+The maintained Python workflow has one fixed profile:
+
+- GitHub-hosted Ubuntu runner;
+- exact clean checkout with shallow history and no persisted credential;
+- `python scripts/validate.py` as the only validation invocation;
+- no workflow inputs, inherited secrets, generated output, or diagnostic upload.
 
 Caller workflows own event triggers, branch filters, concurrency, and any repository-specific permissions that are stricter than the shared baseline.

@@ -29,8 +29,8 @@ EXPECTED_WORKFLOW_FILES = {
 
 ACTION_PINS = {
     "actions/checkout": (
-        "d23441a48e516b6c34aea4fa41551a30e30af803",
-        "v6",
+        "3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "v7.0.1",
     ),
     "Swatinem/rust-cache": (
         "e18b497796c12c097a38f9edb9d0641fb99eee32",

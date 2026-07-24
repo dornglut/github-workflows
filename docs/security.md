@@ -10,8 +10,12 @@ Current workflows:
 - do not perform deployment or release operations;
 - do not accept arbitrary command, script, toolchain, runner, or path inputs;
 - check out only the caller revision selected by the triggering workflow;
+- use clean shallow checkout with `persist-credentials: false`;
 - keep diagnostic files below `RUNNER_TEMP`, outside the caller checkout;
 - upload only the bounded validation log and only after failure;
-- use maintained action majors that are statically enforced by repository validation.
+- pin every external Action to a full commit SHA with an inline release comment;
+- receive Action dependency updates through reviewed Dependabot pull requests.
 
-Callers must pin the reusable workflow to an immutable commit and retain repository-local branch protection and required checks. The caller controls event triggers and must not use the shared workflow from a privileged `pull_request_target` path.
+A full commit SHA is the immutable dependency boundary. Release tags in comments are documentation and update metadata, not executable references.
+
+Callers pin the reusable workflow to an immutable commit and retain repository-local branch protection and required checks. The caller controls event triggers and must not use the shared workflow from a privileged `pull_request_target` path.

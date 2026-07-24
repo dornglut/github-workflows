@@ -277,9 +277,9 @@ def validate_workflows(failures: list[str]) -> None:
         if WORKFLOW_INPUT_RE.search(python_text):
             fail(f"{path_text}: inputs and secrets are forbidden for the fixed Python profile", failures)
         python_commands = [
-            line.strip()
+            line.strip().removeprefix("run: ").strip()
             for line in python_text.splitlines()
-            if line.strip().startswith("python ")
+            if line.strip().startswith("run: python ")
         ]
         if python_commands != [EXPECTED_PYTHON_COMMAND]:
             fail(

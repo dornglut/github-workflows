@@ -17,7 +17,9 @@ It must not:
 
 - every external Action is pinned to a full commit SHA;
 - the same line records the intended release tag for human review and Dependabot updates;
-- checkout uses a clean shallow fetch of the triggering caller revision;
+- pull-request callers validate `github.event.pull_request.head.sha`, while `push` and `workflow_dispatch` callers validate `github.sha`; unsupported events or an empty revision fail before checkout;
+- checkout explicitly selects that expected revision, then proves `git rev-parse HEAD` equals it before toolchain installation or repository validation;
+- pull-request feature-head validation is distinct from validation of GitHub's synthetic merge result and does not claim an eventual squash-merge revision;
 - checkout sets `persist-credentials: false`;
 - Action dependency updates arrive through reviewed pull requests;
 - a reusable-workflow revision remains immutable for existing callers.
@@ -32,7 +34,8 @@ The maintained Rust workflow has one fixed profile:
 - Rust 1.93.0 with `rustfmt` and `clippy` available for repository-owned MSRV checks;
 - Cargo caching;
 - `cargo +stable validate` as the only validation invocation;
-- failure-only upload of an out-of-tree `validation.log` below `RUNNER_TEMP` with three-day retention;
+- compact success evidence naming the repository, event, expected and actual revisions, canonical command, and conclusion;
+- up to 40 selected diagnostic lines and 160 final log lines on failure, with the complete out-of-tree log below `RUNNER_TEMP` retained in the `rust-repository-validation-diagnostics` artifact for three days;
 - cleanup of the out-of-tree log on every result.
 
 The workflow supplies the environment required by the current Dornglut Rust repositories. The caller's `.cargo/config.toml`, `xtask`, lockfiles, tests, documentation checks, policy checks, and clean-state proof remain the validation authority.
@@ -44,6 +47,7 @@ The maintained Python workflow has one fixed profile:
 - GitHub-hosted Ubuntu runner;
 - exact clean checkout with shallow history and no persisted credential;
 - `python scripts/validate.py` as the only validation invocation;
-- no workflow inputs, inherited secrets, generated output, or diagnostic upload.
+- the same compact success evidence and bounded failure diagnostics as the Rust profile, with the complete log retained for three days in `python-repository-validation-diagnostics`;
+- no workflow inputs, inherited secrets, or generated output.
 
 Caller workflows own event triggers, branch filters, concurrency, and any repository-specific permissions that are stricter than the shared baseline.

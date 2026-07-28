@@ -14,12 +14,65 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
+      - name: Resolve expected caller revision
+        id: revision
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          case "${EVENT_NAME}" in
+            pull_request) expected_revision="${PULL_REQUEST_HEAD_SHA}" ;;
+            push|workflow_dispatch) expected_revision="${EVENT_SHA}" ;;
+            *)
+              echo "Unsupported caller event: ${EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "${expected_revision}" ]]; then
+            echo "Expected caller revision is empty for event: ${EVENT_NAME}" >&2
+            exit 1
+          fi
+          {
+            echo "expected_revision=${expected_revision}"
+            echo "pull_request_base_revision=${PULL_REQUEST_BASE_SHA}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Check out caller repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           clean: true
           fetch-depth: 1
           persist-credentials: false
+          ref: ${{ steps.revision.outputs.expected_revision }}
+
+      - name: Prove checked-out caller revision
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}
+          PULL_REQUEST_BASE_REVISION: ${{ steps.revision.outputs.pull_request_base_revision }}
+        run: |
+          set -euo pipefail
+          actual_revision="$(git rev-parse HEAD)"
+          if [[ "${actual_revision}" != "${EXPECTED_REVISION}" ]]; then
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Event: ${GITHUB_EVENT_NAME}"
+            echo "Expected revision: ${EXPECTED_REVISION}"
+            echo "Actual checked-out revision: ${actual_revision}"
+            echo "Conclusion: FAIL (checked-out revision differs from expected revision)"
+            exit 1
+          fi
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Event: ${GITHUB_EVENT_NAME}"
+          echo "Expected revision: ${EXPECTED_REVISION}"
+          echo "Actual checked-out revision: ${actual_revision}"
+          if [[ -n "${PULL_REQUEST_BASE_REVISION}" ]]; then
+            echo "Pull-request base revision: ${PULL_REQUEST_BASE_REVISION}"
+          fi
+          echo "Conclusion: PASS (checked-out revision matches expected revision)"
 
       - name: Install maintained Rust toolchains
         run: |
@@ -31,19 +84,48 @@ jobs:
 
       - name: Run repository validation authority
         shell: bash
+        env:
+          EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}
+          PULL_REQUEST_BASE_REVISION: ${{ steps.revision.outputs.pull_request_base_revision }}
         run: |
-          set -o pipefail
-          cargo +stable validate 2>&1 | tee "${RUNNER_TEMP}/validation.log"
+          log_path="${RUNNER_TEMP}/rust-repository-validation.log"
+          set +e
+          cargo +stable validate >"${log_path}" 2>&1
+          validation_status=$?
+          if [[ "${validation_status}" -eq 0 ]]; then
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Event: ${GITHUB_EVENT_NAME}"
+            echo "Expected revision: ${EXPECTED_REVISION}"
+            echo "Actual checked-out revision: $(git rev-parse HEAD)"
+            if [[ -n "${PULL_REQUEST_BASE_REVISION}" ]]; then
+              echo "Pull-request base revision: ${PULL_REQUEST_BASE_REVISION}"
+            fi
+            echo "Canonical command: cargo +stable validate"
+            echo "Conclusion: PASS"
+            exit 0
+          fi
+          echo "::group::Selected validation diagnostics (up to 40 lines)"
+          log_lines="$(wc -l < "${log_path}")"
+          excerpt_lines=$((log_lines - 160))
+          if [[ "${excerpt_lines}" -gt 0 ]]; then
+            head -n "${excerpt_lines}" "${log_path}" | grep -Eai 'error|warning|fail|panic|assert|denied' | head -n 40 || true
+          fi
+          echo "::endgroup::"
+          echo "::group::Validation log tail (up to 160 lines)"
+          tail -n 160 "${log_path}" || true
+          echo "::endgroup::"
+          echo "Complete diagnostics: rust-repository-validation-diagnostics artifact (3-day retention)"
+          exit "${validation_status}"
 
       - name: Upload validation diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: repository-validation-diagnostics
-          path: ${{ runner.temp }}/validation.log
+          name: rust-repository-validation-diagnostics
+          path: ${{ runner.temp }}/rust-repository-validation.log
           if-no-files-found: error
           retention-days: 3
 
       - name: Remove validation diagnostics
         if: always()
-        run: rm -f "${RUNNER_TEMP}/validation.log"
+        run: rm -f "${RUNNER_TEMP}/rust-repository-validation.log"

@@ -93,6 +93,16 @@ jobs:
             echo "Conclusion: PASS"
             exit 0
           fi
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Event: ${GITHUB_EVENT_NAME}"
+          echo "Expected revision: ${EXPECTED_REVISION}"
+          echo "Actual checked-out revision: $(git rev-parse HEAD)"
+          if [[ -n "${PULL_REQUEST_BASE_REVISION}" ]]; then
+            echo "Pull-request base revision: ${PULL_REQUEST_BASE_REVISION}"
+          fi
+          echo "Canonical command: python scripts/validate.py"
+          echo "Validation exit status: ${validation_status}"
+          echo "Conclusion: FAIL"
           echo "::group::Selected validation diagnostics (up to 40 lines)"
           log_lines="$(wc -l < "${log_path}")"
           excerpt_lines=$((log_lines - 160))

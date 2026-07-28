@@ -268,12 +268,20 @@ def validate_revision_contract(path: Path, text: str, failures: list[str]) -> No
         'if [[ -z "${expected_revision}" ]]',
         "Unsupported caller event:",
         EXPECTED_REVISION_OUTPUT,
+        "pull_request_base_revision=${PULL_REQUEST_BASE_SHA}",
     ):
         if fragment not in resolution:
             fail(f"{path_text}: expected-revision resolution missing {fragment!r}", failures)
 
     if EXPECTED_REVISION_REF not in checkout:
         fail(f"{path_text}: checkout must explicitly use the resolved expected revision", failures)
+
+    for fragment in (
+        "EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}",
+        "PULL_REQUEST_BASE_REVISION: ${{ steps.revision.outputs.pull_request_base_revision }}",
+    ):
+        if fragment not in validation:
+            fail(f"{path_text}: validation step must receive revision output {fragment!r}", failures)
 
     for fragment in (
         'actual_revision="$(git rev-parse HEAD)"',
@@ -337,30 +345,92 @@ def validate_diagnostic_contract(
                 f"{path_text}: expected exactly one Python validation command, found {python_validation_lines}",
                 failures,
             )
+    success_marker = 'echo "Conclusion: PASS"'
+    failure_marker = 'echo "Conclusion: FAIL"'
+    status_marker = "validation_status=$?"
+    success_branch_marker = 'if [[ "${validation_status}" -eq 0 ]]'
+    final_exit_marker = 'exit "${validation_status}"'
+    tail_marker = f"tail -n {DIAGNOSTIC_TAIL_LIMIT}"
+    status_index = validation.find(status_marker)
+    success_branch_index = validation.find(success_branch_marker)
+    success_index = validation.find(success_marker)
+    failure_index = validation.find(failure_marker)
+    final_exit_index = validation.rfind(final_exit_marker)
+    tail_index = validation.find(tail_marker)
+    if min(
+        status_index,
+        success_branch_index,
+        success_index,
+        failure_index,
+        final_exit_index,
+        tail_index,
+    ) < 0:
+        fail(f"{path_text}: validation result record is incomplete", failures)
+        return
+    success_result = validation[success_branch_index:failure_index]
+    failure_result = validation[success_index + len(success_marker) :]
     for fragment in (
         f'log_path="${{RUNNER_TEMP}}/{log_filename}"',
-        "validation_status=$?",
-        'if [[ "${validation_status}" -eq 0 ]]',
-        f"Canonical command: {command}",
-        "Conclusion: PASS",
+        status_marker,
+        success_branch_marker,
+        success_marker,
         f"head -n {DIAGNOSTIC_LINE_LIMIT}",
-        f"tail -n {DIAGNOSTIC_TAIL_LIMIT}",
+        tail_marker,
         f"Complete diagnostics: {artifact_name} artifact (3-day retention)",
-        'exit "${validation_status}"',
+        final_exit_marker,
     ):
         if fragment not in validation:
             fail(f"{path_text}: diagnostics contract missing {fragment!r}", failures)
-    if "tee" in validation or "cat \"${log_path}\"" in validation:
-        fail(f"{path_text}: complete validation output must not stream to the console", failures)
-    if validation.index('if [[ "${validation_status}" -eq 0 ]]') > validation.index(
-        f"tail -n {DIAGNOSTIC_TAIL_LIMIT}"
+    common_result_fields = (
+        'echo "Repository: ${GITHUB_REPOSITORY}"',
+        'echo "Event: ${GITHUB_EVENT_NAME}"',
+        'echo "Expected revision: ${EXPECTED_REVISION}"',
+        'echo "Actual checked-out revision: $(git rev-parse HEAD)"',
+        'if [[ -n "${PULL_REQUEST_BASE_REVISION}" ]]',
+        'echo "Pull-request base revision: ${PULL_REQUEST_BASE_REVISION}"',
+        f'echo "Canonical command: {command}"',
+    )
+    result_records = (
+        ("success", success_result, (*common_result_fields, success_marker)),
+        (
+            "failure",
+            failure_result,
+            (
+                *common_result_fields,
+                'echo "Validation exit status: ${validation_status}"',
+                failure_marker,
+            ),
+        ),
+    )
+    for result_name, result_text, fields in result_records:
+        previous_index = -1
+        for fragment in fields:
+            field_index = result_text.find(fragment)
+            if field_index < 0:
+                fail(f"{path_text}: {result_name} result missing {fragment!r}", failures)
+            elif field_index < previous_index:
+                fail(f"{path_text}: {result_name} result fields are out of order", failures)
+            previous_index = field_index
+    for fragment in (
+        'echo "Validation exit status: ${validation_status}"',
+        final_exit_marker,
     ):
+        if fragment not in validation:
+            fail(f"{path_text}: diagnostics contract missing {fragment!r}", failures)
+    if not (
+        status_index < success_branch_index < success_index < failure_index < final_exit_index
+    ):
+        fail(f"{path_text}: validation result ordering must preserve the original status", failures)
+    if "tee" in validation or "cat " in validation:
+        fail(f"{path_text}: complete validation output must not stream to the console", failures)
+    if success_branch_index > tail_index:
         fail(f"{path_text}: successful validation must not print complete diagnostics", failures)
 
     for fragment in (
         "if: failure()",
         f"name: {artifact_name}",
         f"path: ${{{{ runner.temp }}}}/{log_filename}",
+        "if-no-files-found: error",
         "retention-days: 3",
     ):
         if fragment not in artifact:

@@ -9,10 +9,10 @@ Current workflows:
 - do not run on `pull_request_target`;
 - do not perform deployment or release operations;
 - do not accept arbitrary command, script, toolchain, runner, or path inputs;
-- check out only the caller revision selected by the triggering workflow;
+- resolve the caller revision from the triggering event, select it explicitly, and prove the checked-out SHA before validation;
 - use clean shallow checkout with `persist-credentials: false`;
 - keep diagnostic files below `RUNNER_TEMP`, outside the caller checkout;
-- upload only the bounded validation log and only after failure;
+- print only bounded diagnostics and upload the complete short-retention validation log only after failure;
 - pin every external Action to a full commit SHA with an inline release comment;
 - receive Action dependency updates through reviewed Dependabot pull requests.
 

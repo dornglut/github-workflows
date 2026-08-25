@@ -20,3 +20,7 @@ Canonical validation:
 ```text
 python scripts/validate.py
 ```
+
+## License
+
+Current repository content is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`). This organization-infrastructure repository does not use the separate commercial licensing path assigned to Dornglut product repositories. Third-party Actions remain governed by their own upstream licenses.

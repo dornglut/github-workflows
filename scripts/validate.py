@@ -155,6 +155,20 @@ def validate_action_reference(path_text: str, line: str, failures: list[str]) ->
     reference = match.group("reference")
     comment = match.group("comment")
 
+    starts_quoted = reference[:1] in {'"', "'"}
+    ends_quoted = reference[-1:] in {'"', "'"}
+    if starts_quoted or ends_quoted:
+        if not starts_quoted or not ends_quoted or reference[0] != reference[-1]:
+            fail(f"{path_text}: mismatched quotes in uses reference {reference!r}", failures)
+            return
+        reference = reference[1:-1]
+        if not reference:
+            fail(f"{path_text}: quoted uses reference must not be empty", failures)
+            return
+        if reference.startswith("./"):
+            fail(f"{path_text}: local reusable workflow reference must remain unquoted", failures)
+            return
+
     if reference.startswith("./"):
         if reference != "./.github/workflows/reusable-python-repository-validate.yml":
             fail(f"{path_text}: unexpected local workflow reference {reference!r}", failures)
@@ -218,7 +232,14 @@ def validate_workflow_baseline(path: Path, failures: list[str]) -> str | None:
         if line.lstrip().startswith("uses:"):
             validate_action_reference(path_text, line, failures)
 
-    checkout_count = text.count("uses: actions/checkout@")
+    checkout_count = sum(
+        text.count(fragment)
+        for fragment in (
+            "uses: actions/checkout@",
+            'uses: "actions/checkout@',
+            "uses: 'actions/checkout@",
+        )
+    )
     persist_false_count = text.count("persist-credentials: false")
     if path.name.startswith("reusable-") and checkout_count != 1:
         fail(f"{path_text}: reusable profile must have exactly one checkout", failures)
@@ -521,10 +542,19 @@ def validate_dependabot(failures: list[str]) -> None:
 
 def validate_documented_contract(failures: list[str]) -> None:
     checks = {
+        "LICENSE": (
+            "Apache License",
+            "Version 2.0, January 2004",
+            "END OF TERMS AND CONDITIONS",
+        ),
         "README.md": (
             "full commit SHAs",
             "Dependabot proposes reviewed updates",
             "normative [reusable workflow contract]",
+            "## License",
+            "[Apache License 2.0](LICENSE)",
+            "`Apache-2.0`",
+            "does not use the separate commercial licensing path",
         ),
         "AGENTS.md": (
             "Pin every external Action to a full commit SHA",
@@ -565,7 +595,7 @@ def main() -> int:
     for path in sorted(ROOT.rglob("*")):
         if not path.is_file() or ".git" in path.parts:
             continue
-        if path.suffix.lower() in TEXT_SUFFIXES:
+        if path.suffix.lower() in TEXT_SUFFIXES or path.name == "LICENSE":
             validate_text_file(path, failures)
 
     validate_workflows(failures)

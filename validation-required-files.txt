@@ -1,4 +1,5 @@
 README.md
+LICENSE
 AGENTS.md
 docs/contract.md
 docs/versioning.md

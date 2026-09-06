@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from validate_diagnostics import validate_diagnostic_contract
 from validate_support import (

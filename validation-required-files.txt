@@ -11,4 +11,5 @@ examples/python-caller.yml
 .github/workflows/reusable-python-repository-validate.yml
 .github/workflows/validate.yml
 scripts/validate.py
+scripts/validate_repository.py
 validation-required-files.txt

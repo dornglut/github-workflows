@@ -110,6 +110,7 @@ jobs:
         env:
           EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}
           PULL_REQUEST_BASE_REVISION: ${{ steps.revision.outputs.pull_request_base_revision }}
+          REPOSITORY_REVIEW_ARTIFACT_DIR: ${{ runner.temp }}/repository-review-artifacts
         run: |
           log_path="${RUNNER_TEMP}/rust-repository-validation.log"
           set +e
@@ -149,6 +150,15 @@ jobs:
           echo "::endgroup::"
           echo "Complete diagnostics: rust-repository-validation-diagnostics artifact (3-day retention)"
           exit "${validation_status}"
+
+      - name: Upload repository review artifacts
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rust-repository-review-artifacts-${{ steps.revision.outputs.expected_revision }}
+          path: ${{ runner.temp }}/repository-review-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload validation diagnostics
         if: failure()

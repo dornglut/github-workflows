@@ -31,14 +31,15 @@ The maintained Rust workflow has one fixed profile:
 - GitHub-hosted Ubuntu runner;
 - exact clean checkout with shallow history and no persisted credential;
 - stable Rust with `rustfmt` and `clippy`;
-- Rust 1.93.0 with `rustfmt` and `clippy` available for repository-owned MSRV checks;
+- each unique caller-declared `rust-version` value reported by Cargo metadata is installed with `rustfmt` and `clippy`; a caller that declares none receives no additional Rust toolchain;
+- Cargo metadata discovery runs from an exact temporary archive under `RUNNER_TEMP`, so environment provisioning does not generate or update files in the caller checkout;
 - Cargo caching;
 - `cargo +stable validate` as the only validation invocation;
 - compact success evidence naming the repository, event, expected and actual revisions, canonical command, and conclusion;
 - up to 40 selected diagnostic lines and 160 final log lines on failure, with the complete out-of-tree log below `RUNNER_TEMP` retained in the `rust-repository-validation-diagnostics` artifact for three days;
 - cleanup of the out-of-tree log on every result.
 
-The workflow supplies the environment required by the current Dornglut Rust repositories. The caller's `.cargo/config.toml`, `xtask`, lockfiles, tests, documentation checks, policy checks, and clean-state proof remain the validation authority.
+The workflow supplies stable Rust plus caller-declared `rust-version` values required by checked-out Cargo metadata. The caller remains authoritative for whether an MSRV is declared, which version is declared, and whether or how canonical validation exercises that version. The caller's `.cargo/config.toml`, `xtask`, lockfiles, tests, documentation checks, policy checks, and clean-state proof remain the validation authority.
 
 ## Python documentation profile
 

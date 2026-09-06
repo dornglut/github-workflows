@@ -1,6 +1,6 @@
 # Reusable workflow contract
 
-A shared workflow may standardize runner selection, exact checkout, maintained toolchain installation, dependency caching, timeout, permissions, invocation of a repository-owned command, and bounded failure diagnostics.
+A shared workflow may standardize runner selection, exact checkout, maintained toolchain installation, dependency caching, timeout, permissions, invocation of a repository-owned command, bounded failure diagnostics, and fixed out-of-tree review-artifact publication produced by that command.
 
 It must not:
 
@@ -10,7 +10,7 @@ It must not:
 - use `pull_request_target`;
 - request write permissions;
 - receive or inherit secrets unless a later accepted ADR authorizes a bounded use case;
-- accept an arbitrary command, script, toolchain, runner, or working-directory input;
+- accept an arbitrary command, script, toolchain, runner, path, or working-directory input;
 - hide validation failures or convert them into generated commits.
 
 ## Dependency and checkout contract
@@ -36,10 +36,14 @@ The maintained Rust workflow has one fixed profile:
 - Cargo caching;
 - `cargo +stable validate` as the only validation invocation;
 - compact success evidence naming the repository, event, expected and actual revisions, canonical command, and conclusion;
+- the canonical validation process receives `REPOSITORY_REVIEW_ARTIFACT_DIR` pointing to the fixed `${RUNNER_TEMP}/repository-review-artifacts` directory; callers may optionally write human-review evidence there as part of their own validation semantics;
+- after successful validation, that fixed directory is uploaded when populated as a seven-day `rust-repository-review-artifacts-<exact-revision>` review artifact; an empty directory produces no artifact and is not an error;
 - up to 40 selected diagnostic lines and 160 final log lines on failure, with the complete out-of-tree log below `RUNNER_TEMP` retained in the `rust-repository-validation-diagnostics` artifact for three days;
-- cleanup of the out-of-tree log on every result.
+- cleanup of the out-of-tree validation log on every result.
 
-The workflow supplies stable Rust plus caller-declared `rust-version` values required by checked-out Cargo metadata. The caller remains authoritative for whether an MSRV is declared, which version is declared, and whether or how canonical validation exercises that version. The caller's `.cargo/config.toml`, `xtask`, lockfiles, tests, documentation checks, policy checks, and clean-state proof remain the validation authority.
+The workflow never generates caller-specific review evidence itself. It only provides the fixed out-of-tree destination and publishes caller-validation output after the canonical command succeeds. Review artifact publication does not alter the caller checkout or validation result and is not a second validation command.
+
+The workflow supplies stable Rust plus caller-declared `rust-version` values required by checked-out Cargo metadata. The caller remains authoritative for whether an MSRV is declared, which version is declared, whether review evidence is generated, and whether or how canonical validation exercises those contracts. The caller's `.cargo/config.toml`, `xtask`, lockfiles, tests, documentation checks, policy checks, and clean-state proof remain the validation authority.
 
 ## Python documentation profile
 

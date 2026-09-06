@@ -17,6 +17,10 @@ VALIDATE_COMMAND_RE = re.compile(r"^cargo(?:\s+\+[^\s]+)?\s+validate(?:\s|$)")
 PYTHON_VALIDATE_COMMAND_RE = re.compile(r"^python\s+scripts/validate\.py(?:\s|$)")
 USES_LINE_RE = re.compile(r"^\s*uses:\s*(?P<reference>\S+?)(?:\s+#\s*(?P<comment>\S+))?\s*$")
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+RUST_TOOLCHAIN_INSTALL_RE = re.compile(
+    r"rustup toolchain install (?P<toolchain>\S+) --profile minimal --component rustfmt,clippy"
+)
+HARDCODED_RUST_VERSION_DOC_RE = re.compile(r"\bRust \d+\.\d+(?:\.\d+)?\b")
 
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
 RUST_WORKFLOW = WORKFLOW_DIR / "reusable-rust-cargo-validate.yml"
@@ -53,7 +57,15 @@ RUST_REQUIRED_FRAGMENTS = (
     "fetch-depth: 1",
     "persist-credentials: false",
     "rustup toolchain install stable --profile minimal --component rustfmt,clippy",
-    "rustup toolchain install 1.93.0 --profile minimal --component rustfmt,clippy",
+    'metadata_root="${RUNNER_TEMP}/caller-cargo-metadata"',
+    'git archive --format=tar HEAD | tar -xf - -C "${metadata_root}"',
+    "cargo +stable metadata \\",
+    '--manifest-path "${metadata_root}/Cargo.toml" \\',
+    "--no-deps \\",
+    "--format-version 1 |",
+    'package.get("rust_version")',
+    '[[ -n "${toolchain}" ]] || continue',
+    'rustup toolchain install "${toolchain}" --profile minimal --component rustfmt,clippy',
 )
 PYTHON_REQUIRED_FRAGMENTS = (
     "clean: true",
@@ -481,6 +493,14 @@ def validate_workflows(failures: list[str]) -> None:
         for fragment in RUST_REQUIRED_FRAGMENTS:
             if fragment not in rust_text:
                 fail(f"{path_text}: missing required contract fragment: {fragment}", failures)
+        toolchain_installs = [
+            match.group("toolchain") for match in RUST_TOOLCHAIN_INSTALL_RE.finditer(rust_text)
+        ]
+        if toolchain_installs != ["stable", '"${toolchain}"']:
+            fail(
+                f"{path_text}: Rust toolchain installs must be stable plus caller-declared versions, found {toolchain_installs}",
+                failures,
+            )
         for fragment in FORBIDDEN_IN_CHECKOUT_DIAGNOSTICS:
             if fragment in rust_text:
                 fail(f"{path_text}: diagnostic path must remain outside checkout: {fragment}", failures)
@@ -565,6 +585,8 @@ def validate_documented_contract(failures: list[str]) -> None:
             "## Python documentation profile",
             "pull-request callers validate `github.event.pull_request.head.sha`",
             "compact success evidence",
+            "caller-declared `rust-version` values",
+            "temporary archive under `RUNNER_TEMP`",
             "rust-repository-validation-diagnostics",
             "python-repository-validation-diagnostics",
         ),
@@ -585,6 +607,8 @@ def validate_documented_contract(failures: list[str]) -> None:
         for fragment in fragments:
             if fragment not in text:
                 fail(f"{path_text}: missing required contract fragment {fragment!r}", failures)
+        if path_text == "docs/contract.md" and HARDCODED_RUST_VERSION_DOC_RE.search(text):
+            fail(f"{path_text}: hardcoded caller Rust version is forbidden", failures)
 
 
 def main() -> int:

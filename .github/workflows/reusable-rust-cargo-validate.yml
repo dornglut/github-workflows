@@ -75,9 +75,32 @@ jobs:
           echo "Conclusion: PASS (checked-out revision matches expected revision)"
 
       - name: Install maintained Rust toolchains
+        shell: bash
         run: |
+          set -euo pipefail
           rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup toolchain install 1.93.0 --profile minimal --component rustfmt,clippy
+
+          metadata_root="${RUNNER_TEMP}/caller-cargo-metadata"
+          rm -rf "${metadata_root}"
+          mkdir -p "${metadata_root}"
+          cleanup() {
+            rm -rf "${metadata_root}"
+          }
+          trap cleanup EXIT
+
+          git archive --format=tar HEAD | tar -xf - -C "${metadata_root}"
+          declared_toolchains="$(
+            cargo +stable metadata \
+              --manifest-path "${metadata_root}/Cargo.toml" \
+              --no-deps \
+              --format-version 1 |
+              python -c 'import json, sys; print("\n".join(sorted({package["rust_version"] for package in json.load(sys.stdin)["packages"] if package.get("rust_version")})))'
+          )"
+
+          while IFS= read -r toolchain; do
+            [[ -n "${toolchain}" ]] || continue
+            rustup toolchain install "${toolchain}" --profile minimal --component rustfmt,clippy
+          done <<< "${declared_toolchains}"
 
       - name: Cache Cargo data
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2

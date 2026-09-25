@@ -6,7 +6,7 @@ Shared workflows call repository-owned validation commands. They do not copy pro
 
 ## Reusable workflows
 
-- [`reusable-rust-cargo-validate.yml`](.github/workflows/reusable-rust-cargo-validate.yml) installs the maintained Rust toolchains, restores Cargo caches, and runs the caller's fixed `cargo +stable validate` authority with bounded failure diagnostics.
+- [`reusable-rust-cargo-validate.yml`](.github/workflows/reusable-rust-cargo-validate.yml) installs the maintained Rust toolchains, restores Cargo registry/download caches without caller `target/` artifacts, and runs the caller's fixed `cargo +stable validate` authority with bounded failure diagnostics.
 - [`reusable-python-repository-validate.yml`](.github/workflows/reusable-python-repository-validate.yml) checks out the verified caller revision and runs `python scripts/validate.py` with bounded failure diagnostics.
 
 Third-party Actions are pinned to full commit SHAs with readable release comments. Dependabot proposes reviewed updates; tags and branches are not trusted as immutable workflow dependencies.

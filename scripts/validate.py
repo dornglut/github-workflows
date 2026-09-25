@@ -56,6 +56,7 @@ RUST_REQUIRED_FRAGMENTS = (
     "clean: true",
     "fetch-depth: 1",
     "persist-credentials: false",
+    "cache-targets: false",
     "rustup toolchain install stable --profile minimal --component rustfmt,clippy",
     'metadata_root="${RUNNER_TEMP}/caller-cargo-metadata"',
     'git archive --format=tar HEAD | tar -xf - -C "${metadata_root}"',

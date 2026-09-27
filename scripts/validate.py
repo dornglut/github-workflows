@@ -41,6 +41,10 @@ ACTION_PINS = {
         "e18b497796c12c097a38f9edb9d0641fb99eee32",
         "v2",
     ),
+    "Mozilla-Actions/sccache-action": (
+        "fc920bf0ec8de6ee65d409111f7ec508035751ba",
+        "v0.0.11",
+    ),
     "actions/upload-artifact": (
         "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
         "v7",
@@ -49,6 +53,7 @@ ACTION_PINS = {
 
 EXPECTED_RUST_COMMAND = "cargo +stable validate"
 EXPECTED_PYTHON_COMMAND = "python scripts/validate.py"
+EXPECTED_SCCACHE_VERSION = "v0.18.0"
 SUCCESS_SUMMARY_TAIL_LIMIT = 40
 DIAGNOSTIC_LINE_LIMIT = 40
 DIAGNOSTIC_TAIL_LIMIT = 160
@@ -332,6 +337,47 @@ def validate_revision_contract(path: Path, text: str, failures: list[str]) -> No
         fail(f"{path_text}: repository validation must follow revision equality proof", failures)
 
 
+def validate_rust_compiler_cache(text: str, failures: list[str]) -> None:
+    path_text = relative(RUST_WORKFLOW)
+    setup = require_step(path_text, text, "Set up Rust compiler cache", failures)
+    validation = require_step(path_text, text, "Run repository validation authority", failures)
+    if setup is None or validation is None:
+        return
+
+    expected_action = (
+        'uses: "Mozilla-Actions/sccache-action@'
+        'fc920bf0ec8de6ee65d409111f7ec508035751ba" # v0.0.11'
+    )
+    expected_version = f'version: "{EXPECTED_SCCACHE_VERSION}"'
+    for fragment in (expected_action, expected_version):
+        if fragment not in setup:
+            fail(f"{path_text}: compiler-cache setup missing {fragment!r}", failures)
+
+    setup_index = text.find("      - name: Set up Rust compiler cache")
+    validation_index = text.find("      - name: Run repository validation authority")
+    if setup_index < 0 or validation_index < 0 or setup_index >= validation_index:
+        fail(f"{path_text}: compiler cache must be configured before validation", failures)
+
+    for fragment in (
+        'CARGO_INCREMENTAL: "0"',
+        'SCCACHE_GHA_ENABLED: "on"',
+        'RUSTC_WRAPPER: "sccache"',
+    ):
+        if fragment not in validation:
+            fail(f"{path_text}: validation compiler-cache environment missing {fragment!r}", failures)
+
+    if "cache-mode:" in text:
+        fail(
+            f"{path_text}: shared Rust validation must not override caller/GitHub cache access mode",
+            failures,
+        )
+    if "SCCACHE_GHA_RW_MODE" in text:
+        fail(
+            f"{path_text}: shared Rust validation must not override sccache GHA read/write mode",
+            failures,
+        )
+
+
 def validate_rust_success_summary(text: str, failures: list[str]) -> None:
     path_text = relative(RUST_WORKFLOW)
     validation = require_step(path_text, text, "Run repository validation authority", failures)
@@ -558,6 +604,7 @@ def validate_workflows(failures: list[str]) -> None:
             failures,
         )
         validate_rust_success_summary(rust_text, failures)
+        validate_rust_compiler_cache(rust_text, failures)
 
     python_text = texts.get(PYTHON_WORKFLOW)
     if python_text is not None:

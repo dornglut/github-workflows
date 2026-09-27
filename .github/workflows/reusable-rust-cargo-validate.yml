@@ -126,6 +126,9 @@ jobs:
               echo "Pull-request base revision: ${PULL_REQUEST_BASE_REVISION}"
             fi
             echo "Canonical command: cargo +stable validate"
+            echo "::group::Successful validation summary (final up to 40 lines)"
+            tail -n 40 "${log_path}" || true
+            echo "::endgroup::"
             echo "Conclusion: PASS"
             exit 0
           fi

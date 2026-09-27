@@ -35,7 +35,8 @@ The maintained Rust workflow has one fixed profile:
 - Cargo metadata discovery runs from an exact temporary archive under `RUNNER_TEMP`, so environment provisioning does not generate or update files in the caller checkout;
 - Cargo registry/download caching without restoring workspace `target/` artifacts;
 - `cargo +stable validate` as the only validation invocation;
-- compact success evidence naming the repository, event, expected and actual revisions, canonical command, and conclusion;
+- compact success evidence naming the repository, event, expected and actual revisions, canonical command, and conclusion, plus at most the final 40 validation-log lines as a bounded success summary;
+- successful validation never streams or uploads the complete captured log;
 - up to 40 selected diagnostic lines and 160 final log lines on failure, with the complete out-of-tree log below `RUNNER_TEMP` retained in the `rust-repository-validation-diagnostics` artifact for three days;
 - cleanup of the out-of-tree log on every result.
 

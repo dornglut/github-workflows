@@ -49,6 +49,7 @@ ACTION_PINS = {
 
 EXPECTED_RUST_COMMAND = "cargo +stable validate"
 EXPECTED_PYTHON_COMMAND = "python scripts/validate.py"
+SUCCESS_SUMMARY_TAIL_LIMIT = 40
 DIAGNOSTIC_LINE_LIMIT = 40
 DIAGNOSTIC_TAIL_LIMIT = 160
 
@@ -331,6 +332,46 @@ def validate_revision_contract(path: Path, text: str, failures: list[str]) -> No
         fail(f"{path_text}: repository validation must follow revision equality proof", failures)
 
 
+def validate_rust_success_summary(text: str, failures: list[str]) -> None:
+    path_text = relative(RUST_WORKFLOW)
+    validation = require_step(path_text, text, "Run repository validation authority", failures)
+    if validation is None:
+        return
+
+    success_branch_marker = 'if [[ "${validation_status}" -eq 0 ]]'
+    failure_marker = 'echo "Conclusion: FAIL"'
+    success_branch_index = validation.find(success_branch_marker)
+    failure_index = validation.find(failure_marker)
+    if success_branch_index < 0 or failure_index < 0 or success_branch_index >= failure_index:
+        fail(f"{path_text}: cannot isolate successful validation branch", failures)
+        return
+
+    success_result = validation[success_branch_index:failure_index]
+    group_start = (
+        f'echo "::group::Successful validation summary '
+        f'(final up to {SUCCESS_SUMMARY_TAIL_LIMIT} lines)"'
+    )
+    tail_marker = f'tail -n {SUCCESS_SUMMARY_TAIL_LIMIT} "${{log_path}}" || true'
+    group_end = 'echo "::endgroup::"'
+    conclusion = 'echo "Conclusion: PASS"'
+
+    previous_index = -1
+    for fragment in (group_start, tail_marker, group_end, conclusion):
+        if success_result.count(fragment) != 1:
+            fail(
+                f"{path_text}: successful validation summary must contain exactly one {fragment!r}",
+                failures,
+            )
+            continue
+        field_index = success_result.find(fragment)
+        if field_index < previous_index:
+            fail(f"{path_text}: successful validation summary fields are out of order", failures)
+        previous_index = field_index
+
+    if "cat " in success_result or "tee" in success_result:
+        fail(f"{path_text}: successful validation must not stream the complete log", failures)
+
+
 def validate_diagnostic_contract(
     path: Path,
     text: str,
@@ -516,6 +557,7 @@ def validate_workflows(failures: list[str]) -> None:
             "rust-repository-validation-diagnostics",
             failures,
         )
+        validate_rust_success_summary(rust_text, failures)
 
     python_text = texts.get(PYTHON_WORKFLOW)
     if python_text is not None:

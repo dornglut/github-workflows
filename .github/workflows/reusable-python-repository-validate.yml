@@ -23,6 +23,7 @@ jobs:
           set -euo pipefail
           case "${EVENT_NAME}" in
             pull_request) expected_revision="${PULL_REQUEST_HEAD_SHA}" ;;
+            merge_group) expected_revision="${EVENT_SHA}" ;;
             push|workflow_dispatch) expected_revision="${EVENT_SHA}" ;;
             *)
               echo "Unsupported caller event: ${EVENT_NAME}" >&2

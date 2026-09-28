@@ -17,9 +17,9 @@ It must not:
 
 - every external Action is pinned to a full commit SHA;
 - the same line records the intended release tag for human review and Dependabot updates;
-- pull-request callers validate `github.event.pull_request.head.sha`, while `push` and `workflow_dispatch` callers validate `github.sha`; unsupported events or an empty revision fail before checkout;
+- pull-request callers validate `github.event.pull_request.head.sha`; `merge_group` callers validate the merge-group `github.sha`; `push` and `workflow_dispatch` callers validate `github.sha`; unsupported events or an empty revision fail before checkout;
 - checkout explicitly selects that expected revision, then proves `git rev-parse HEAD` equals it before toolchain installation or repository validation;
-- pull-request feature-head validation is distinct from validation of GitHub's synthetic merge result and does not claim an eventual squash-merge revision;
+- pull-request feature-head validation is distinct from `merge_group` integration validation: the former proves the reviewed feature head, while the latter proves GitHub's exact merge-group SHA against the queue's current integration state; neither is the eventual squash-merge revision;
 - checkout sets `persist-credentials: false`;
 - Action dependency updates arrive through reviewed pull requests;
 - a reusable-workflow revision remains immutable for existing callers.

@@ -303,8 +303,6 @@ def validate_revision_contract(path: Path, text: str, failures: list[str]) -> No
         "EVENT_SHA: ${{ github.sha }}",
         "PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
         "PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
-        'pull_request) expected_revision="${PULL_REQUEST_HEAD_SHA}"',
-        'push|workflow_dispatch) expected_revision="${EVENT_SHA}"',
         'if [[ -z "${expected_revision}" ]]',
         "Unsupported caller event:",
         EXPECTED_REVISION_OUTPUT,
@@ -312,6 +310,23 @@ def validate_revision_contract(path: Path, text: str, failures: list[str]) -> No
     ):
         if fragment not in resolution:
             fail(f"{path_text}: expected-revision resolution missing {fragment!r}", failures)
+
+    expected_revision_cases = [
+        'pull_request) expected_revision="${PULL_REQUEST_HEAD_SHA}" ;;',
+        'merge_group) expected_revision="${EVENT_SHA}" ;;',
+        'push|workflow_dispatch) expected_revision="${EVENT_SHA}" ;;',
+    ]
+    actual_revision_cases = [
+        line.strip()
+        for line in resolution.splitlines()
+        if "expected_revision=" in line and line.strip().endswith(";;")
+    ]
+    if actual_revision_cases != expected_revision_cases:
+        fail(
+            f"{path_text}: expected exact revision event mapping "
+            f"{expected_revision_cases}, found {actual_revision_cases}",
+            failures,
+        )
 
     if EXPECTED_REVISION_REF not in checkout:
         fail(f"{path_text}: checkout must explicitly use the resolved expected revision", failures)

@@ -372,6 +372,19 @@ def validate_rust_cargo_cache(text: str, failures: list[str]) -> None:
     if cache.count("cache-targets:") != 1:
         fail(f"{path_text}: Cargo cache must declare exactly one cache-targets policy", failures)
 
+    cache_inputs = [
+        match.group(1)
+        for line in cache.splitlines()
+        if (match := re.match(r"^          ([a-z0-9-]+):", line))
+    ]
+    expected_inputs = ["prefix-key", "cache-targets"]
+    if cache_inputs != expected_inputs:
+        fail(
+            f"{path_text}: Cargo cache inputs must remain exactly {expected_inputs}; "
+            f"found {cache_inputs}. Path/policy changes require a reviewed cache generation.",
+            failures,
+        )
+
 
 def validate_rust_compiler_cache(text: str, failures: list[str]) -> None:
     path_text = relative(RUST_WORKFLOW)

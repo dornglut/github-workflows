@@ -54,6 +54,7 @@ ACTION_PINS = {
 EXPECTED_RUST_COMMAND = "cargo +stable validate"
 EXPECTED_PYTHON_COMMAND = "python scripts/validate.py"
 EXPECTED_SCCACHE_VERSION = "v0.18.0"
+EXPECTED_RUST_CACHE_PREFIX = "v1-rust-source-fresh"
 SUCCESS_SUMMARY_TAIL_LIMIT = 40
 DIAGNOSTIC_LINE_LIMIT = 40
 DIAGNOSTIC_TAIL_LIMIT = 160
@@ -352,6 +353,39 @@ def validate_revision_contract(path: Path, text: str, failures: list[str]) -> No
         fail(f"{path_text}: repository validation must follow revision equality proof", failures)
 
 
+def validate_rust_cargo_cache(text: str, failures: list[str]) -> None:
+    path_text = relative(RUST_WORKFLOW)
+    cache = require_step(path_text, text, "Cache Cargo data", failures)
+    if cache is None:
+        return
+
+    required = (
+        f'prefix-key: "{EXPECTED_RUST_CACHE_PREFIX}"',
+        "cache-targets: false",
+    )
+    for fragment in required:
+        if fragment not in cache:
+            fail(f"{path_text}: Cargo cache policy missing {fragment!r}", failures)
+
+    if cache.count("prefix-key:") != 1:
+        fail(f"{path_text}: Cargo cache must declare exactly one prefix-key", failures)
+    if cache.count("cache-targets:") != 1:
+        fail(f"{path_text}: Cargo cache must declare exactly one cache-targets policy", failures)
+
+    cache_inputs = [
+        match.group(1)
+        for line in cache.splitlines()
+        if (match := re.match(r"^          ([a-z0-9-]+):", line))
+    ]
+    expected_inputs = ["prefix-key", "cache-targets"]
+    if cache_inputs != expected_inputs:
+        fail(
+            f"{path_text}: Cargo cache inputs must remain exactly {expected_inputs}; "
+            f"found {cache_inputs}. Path/policy changes require a reviewed cache generation.",
+            failures,
+        )
+
+
 def validate_rust_compiler_cache(text: str, failures: list[str]) -> None:
     path_text = relative(RUST_WORKFLOW)
     setup = require_step(path_text, text, "Set up Rust compiler cache", failures)
@@ -619,6 +653,7 @@ def validate_workflows(failures: list[str]) -> None:
             failures,
         )
         validate_rust_success_summary(rust_text, failures)
+        validate_rust_cargo_cache(rust_text, failures)
         validate_rust_compiler_cache(rust_text, failures)
 
     python_text = texts.get(PYTHON_WORKFLOW)

@@ -106,6 +106,7 @@ jobs:
       - name: Cache Cargo data
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
+          prefix-key: "v1-rust-source-fresh"
           cache-targets: false
 
       - name: Set up Rust compiler cache

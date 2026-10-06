@@ -1061,6 +1061,8 @@ def validate_documented_contract(failures: list[str]) -> None:
             "caller-declared `rust-version` values",
             "temporary archive under `RUNNER_TEMP`",
             "validation-partitions.txt",
+            "scheduling projection",
+            "every single-partition invocation",
             "Repository baseline",
             "python-repository-validation-diagnostics",
         ),

@@ -39,7 +39,6 @@ Existing callers pinned to `b6caad377102ca73794efaf734a65903b8efa829` remain rep
 5. adopt in additional repositories through separate local pull requests;
 6. retain the former immutable revision until known callers have migrated or explicitly accepted remaining on it.
 
-
 ## Partition-aware Rust generation
 
 The partition-aware Rust workflow generation is compatibility-significant and is

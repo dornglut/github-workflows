@@ -9,7 +9,8 @@ Current workflows:
 - do not run on `pull_request_target`;
 - do not perform deployment or release operations;
 - do not accept arbitrary command, script, toolchain, runner, or path inputs;
-- resolve the caller revision from the triggering event, select it explicitly, and prove the checked-out SHA before validation;
+- resolve the caller revision from the triggering event, select it explicitly, and prove the checked-out SHA before partition planning and independently on every validation runner;
+- treat `validation-partitions.txt` as untrusted bounded data: regular UTF-8 file only, at most four narrow identifiers, no shell/script/path/runner/toolchain interpretation, and runner-side identifier revalidation;
 - use clean shallow checkout with `persist-credentials: false`;
 - keep diagnostic files below `RUNNER_TEMP`, outside the caller checkout;
 - print only bounded diagnostics and upload the complete short-retention validation log only after failure;
@@ -18,4 +19,4 @@ Current workflows:
 
 A full commit SHA is the immutable dependency boundary. Release tags in comments are documentation and update metadata, not executable references.
 
-Callers pin the reusable workflow to an immutable commit and retain repository-local branch protection and required checks. The caller controls event triggers and must not use the shared workflow from a privileged `pull_request_target` path.
+Callers pin the reusable workflow to an immutable commit and retain repository-local branch protection and required checks. The caller controls event triggers and must not use the shared workflow from a privileged `pull_request_target` path. Partition inventory remains repository-owned; caller YAML does not supply semantic lanes or arbitrary execution policy.

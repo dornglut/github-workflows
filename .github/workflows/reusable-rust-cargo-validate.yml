@@ -7,14 +7,14 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Repository baseline
+  plan:
+    name: Plan repository validation
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      CARGO_TERM_COLOR: always
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.partitions.outputs.matrix }}
     steps:
-      - name: Resolve expected caller revision
+      - name: Resolve expected caller revision for planning
         id: revision
         shell: bash
         env:
@@ -42,7 +42,7 @@ jobs:
             echo "pull_request_base_revision=${PULL_REQUEST_BASE_SHA}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Check out caller repository
+      - name: Check out caller repository for planning
         uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
         with:
           clean: true
@@ -50,7 +50,141 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.revision.outputs.expected_revision }}
 
-      - name: Prove checked-out caller revision
+      - name: Prove planned caller revision
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}
+          PULL_REQUEST_BASE_REVISION: ${{ steps.revision.outputs.pull_request_base_revision }}
+        run: |
+          set -euo pipefail
+          actual_revision="$(git rev-parse HEAD)"
+          if [[ "${actual_revision}" != "${EXPECTED_REVISION}" ]]; then
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Event: ${GITHUB_EVENT_NAME}"
+            echo "Expected revision: ${EXPECTED_REVISION}"
+            echo "Actual checked-out revision: ${actual_revision}"
+            echo "Conclusion: FAIL (checked-out revision differs from expected revision)"
+            exit 1
+          fi
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Event: ${GITHUB_EVENT_NAME}"
+          echo "Expected revision: ${EXPECTED_REVISION}"
+          echo "Actual checked-out revision: ${actual_revision}"
+          if [[ -n "${PULL_REQUEST_BASE_REVISION}" ]]; then
+            echo "Pull-request base revision: ${PULL_REQUEST_BASE_REVISION}"
+          fi
+          echo "Conclusion: PASS (checked-out revision matches expected revision)"
+
+      - name: Plan validation partitions
+        id: partitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          MANIFEST = Path("validation-partitions.txt")
+          MAX_MANIFEST_BYTES = 512
+          MAX_PARTITIONS = 4
+          PARTITION_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+          RESERVED_IDS = {"complete"}
+
+          def abort(message: str) -> None:
+              print(f"invalid validation partition manifest: {message}", file=sys.stderr)
+              raise SystemExit(1)
+
+          if MANIFEST.is_symlink():
+              abort("validation-partitions.txt must be a regular file")
+
+          if not MANIFEST.exists():
+              entries = [{"mode": "complete", "id": "complete"}]
+          else:
+              if not MANIFEST.is_file():
+                  abort("validation-partitions.txt must be a regular file")
+              raw = MANIFEST.read_bytes()
+              if len(raw) > MAX_MANIFEST_BYTES:
+                  abort(f"validation-partitions.txt exceeds {MAX_MANIFEST_BYTES} bytes")
+              if raw and not raw.endswith(b"\n"):
+                  abort("validation-partitions.txt must end with a newline")
+              try:
+                  text = raw.decode("utf-8")
+              except UnicodeDecodeError:
+                  abort("validation-partitions.txt must be valid UTF-8")
+
+              partitions = text.splitlines()
+              if not 1 <= len(partitions) <= MAX_PARTITIONS:
+                  abort(f"expected 1..{MAX_PARTITIONS} partition identifiers")
+              if len(set(partitions)) != len(partitions):
+                  abort("partition identifiers must be unique")
+
+              for partition in partitions:
+                  if partition != partition.strip():
+                      abort("partition identifiers must not contain surrounding whitespace")
+                  if not PARTITION_RE.fullmatch(partition):
+                      abort(f"invalid partition identifier: {partition!r}")
+                  if partition in RESERVED_IDS:
+                      abort(f"reserved partition identifier: {partition!r}")
+
+              entries = [{"mode": "partition", "id": partition} for partition in partitions]
+
+          matrix = json.dumps({"include": entries}, separators=(",", ":"))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"matrix={matrix}\n")
+          print(f"Validation matrix: {matrix}")
+          PY
+
+  validate:
+    name: Validation / ${{ matrix.id }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Resolve expected caller revision for validation
+        id: revision
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          case "${EVENT_NAME}" in
+            pull_request) expected_revision="${PULL_REQUEST_HEAD_SHA}" ;;
+            merge_group) expected_revision="${EVENT_SHA}" ;;
+            push|workflow_dispatch) expected_revision="${EVENT_SHA}" ;;
+            *)
+              echo "Unsupported caller event: ${EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "${expected_revision}" ]]; then
+            echo "Expected caller revision is empty for event: ${EVENT_NAME}" >&2
+            exit 1
+          fi
+          {
+            echo "expected_revision=${expected_revision}"
+            echo "pull_request_base_revision=${PULL_REQUEST_BASE_SHA}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Check out caller repository for validation
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+        with:
+          clean: true
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ steps.revision.outputs.expected_revision }}
+
+      - name: Prove validation caller revision
         shell: bash
         env:
           EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}
@@ -119,13 +253,39 @@ jobs:
         env:
           EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}
           PULL_REQUEST_BASE_REVISION: ${{ steps.revision.outputs.pull_request_base_revision }}
+          VALIDATION_MODE: ${{ matrix.mode }}
+          VALIDATION_PARTITION: ${{ matrix.id }}
           CARGO_INCREMENTAL: "0"
           SCCACHE_GHA_ENABLED: "on"
           RUSTC_WRAPPER: "sccache"
         run: |
-          log_path="${RUNNER_TEMP}/rust-repository-validation.log"
+          set -u
+          validation_args=()
+          case "${VALIDATION_MODE}" in
+            complete)
+              if [[ "${VALIDATION_PARTITION}" != "complete" ]]; then
+                echo "Invalid complete validation identifier" >&2
+                exit 1
+              fi
+              command_label="cargo +stable validate"
+              ;;
+            partition)
+              if [[ ! "${VALIDATION_PARTITION}" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || [[ "${VALIDATION_PARTITION}" == "complete" ]]; then
+                echo "Invalid validation partition identifier" >&2
+                exit 1
+              fi
+              validation_args=(--partition "${VALIDATION_PARTITION}")
+              command_label="cargo +stable validate --partition ${VALIDATION_PARTITION}"
+              ;;
+            *)
+              echo "Invalid validation mode: ${VALIDATION_MODE}" >&2
+              exit 1
+              ;;
+          esac
+
+          log_path="${RUNNER_TEMP}/rust-repository-validation-${VALIDATION_PARTITION}.log"
           set +e
-          cargo +stable validate >"${log_path}" 2>&1
+          cargo +stable validate "${validation_args[@]}" >"${log_path}" 2>&1
           validation_status=$?
           if [[ "${validation_status}" -eq 0 ]]; then
             echo "Repository: ${GITHUB_REPOSITORY}"
@@ -135,7 +295,7 @@ jobs:
             if [[ -n "${PULL_REQUEST_BASE_REVISION}" ]]; then
               echo "Pull-request base revision: ${PULL_REQUEST_BASE_REVISION}"
             fi
-            echo "Canonical command: cargo +stable validate"
+            echo "Canonical command: ${command_label}"
             echo "::group::Successful validation summary (final up to 40 lines)"
             tail -n 40 "${log_path}" || true
             echo "::endgroup::"
@@ -149,7 +309,7 @@ jobs:
           if [[ -n "${PULL_REQUEST_BASE_REVISION}" ]]; then
             echo "Pull-request base revision: ${PULL_REQUEST_BASE_REVISION}"
           fi
-          echo "Canonical command: cargo +stable validate"
+          echo "Canonical command: ${command_label}"
           echo "Validation exit status: ${validation_status}"
           echo "Conclusion: FAIL"
           echo "::group::Selected validation diagnostics (up to 40 lines)"
@@ -162,18 +322,42 @@ jobs:
           echo "::group::Validation log tail (up to 160 lines)"
           tail -n 160 "${log_path}" || true
           echo "::endgroup::"
-          echo "Complete diagnostics: rust-repository-validation-diagnostics artifact (3-day retention)"
+          echo "Complete diagnostics: rust-repository-validation-${VALIDATION_PARTITION}-diagnostics artifact (3-day retention)"
           exit "${validation_status}"
 
       - name: Upload validation diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: rust-repository-validation-diagnostics
-          path: ${{ runner.temp }}/rust-repository-validation.log
+          name: rust-repository-validation-${{ matrix.id }}-diagnostics
+          path: ${{ runner.temp }}/rust-repository-validation-${{ matrix.id }}.log
           if-no-files-found: error
           retention-days: 3
 
       - name: Remove validation diagnostics
         if: always()
-        run: rm -f "${RUNNER_TEMP}/rust-repository-validation.log"
+        run: rm -f "${RUNNER_TEMP}"/rust-repository-validation-*.log
+
+  aggregate:
+    name: Repository baseline
+    needs: [plan, validate]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require complete validation success
+        shell: bash
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        run: |
+          set -euo pipefail
+          if [[ "${PLAN_RESULT}" != "success" || "${VALIDATE_RESULT}" != "success" ]]; then
+            echo "Validation planning result: ${PLAN_RESULT}"
+            echo "Validation matrix result: ${VALIDATE_RESULT}"
+            echo "Conclusion: FAIL"
+            exit 1
+          fi
+          echo "Validation planning result: ${PLAN_RESULT}"
+          echo "Validation matrix result: ${VALIDATE_RESULT}"
+          echo "Conclusion: PASS"

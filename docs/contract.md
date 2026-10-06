@@ -70,6 +70,13 @@ complete set of partitions is semantically equivalent to its complete canonical
 invocation. The shared workflow does not infer lanes or decide that a repository check
 may be omitted.
 
+A checked-in partition manifest is only a scheduling projection of that authoritative
+plan. The complete canonical invocation and every single-partition invocation must
+verify the complete manifest against the repository-owned partition plan before any
+partition-specific work executes. This preflight must not live only in one ordinary
+partition, because stale or modified inventory could omit that partition itself.
+Inventory mismatch fails closed before partition-specific validation.
+
 The planning job resolves and proves the exact caller revision once; every matrix
 runner independently checks out and proves that same selected revision. No validation partition may rely on another partition's mutable workspace or
 build artifacts for correctness. The aggregate `Repository baseline` fails when

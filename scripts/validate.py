@@ -52,7 +52,9 @@ ACTION_PINS = {
 }
 
 EXPECTED_RUST_COMMAND = "cargo +stable validate"
+EXPECTED_RUST_MATRIX_COMMAND = 'cargo +stable validate "${validation_args[@]}"'
 EXPECTED_PYTHON_COMMAND = "python scripts/validate.py"
+MAX_RUST_PARTITIONS = 4
 EXPECTED_SCCACHE_VERSION = "v0.18.0"
 EXPECTED_RUST_CACHE_PREFIX = "v1-rust-source-fresh"
 SUCCESS_SUMMARY_TAIL_LIMIT = 40
@@ -74,6 +76,11 @@ RUST_REQUIRED_FRAGMENTS = (
     'package.get("rust_version")',
     '[[ -n "${toolchain}" ]] || continue',
     'rustup toolchain install "${toolchain}" --profile minimal --component rustfmt,clippy',
+    "validation-partitions.txt",
+    "fail-fast: false",
+    "fromJSON(needs.plan.outputs.matrix)",
+    'VALIDATION_MODE: ${{ matrix.mode }}',
+    'VALIDATION_PARTITION: ${{ matrix.id }}',
 )
 PYTHON_REQUIRED_FRAGMENTS = (
     "clean: true",
@@ -261,8 +268,14 @@ def validate_workflow_baseline(path: Path, failures: list[str]) -> str | None:
         )
     )
     persist_false_count = text.count("persist-credentials: false")
-    if path.name.startswith("reusable-") and checkout_count != 1:
-        fail(f"{path_text}: reusable profile must have exactly one checkout", failures)
+    if path.name.startswith("reusable-"):
+        expected_checkout_count = 2 if path == RUST_WORKFLOW else 1
+        if checkout_count != expected_checkout_count:
+            fail(
+                f"{path_text}: reusable profile must have exactly "
+                f"{expected_checkout_count} checkout declarations",
+                failures,
+            )
     if checkout_count != persist_false_count:
         fail(
             f"{path_text}: every checkout requires exactly one persist-credentials: false entry",
@@ -351,6 +364,332 @@ def validate_revision_contract(path: Path, text: str, failures: list[str]) -> No
 
     if not (text.index(proof) < text.index(validation)):
         fail(f"{path_text}: repository validation must follow revision equality proof", failures)
+
+
+def job_body(text: str, name: str) -> str | None:
+    jobs = text.split("\njobs:\n", 1)
+    if len(jobs) != 2:
+        return None
+    pattern = re.compile(
+        rf"^  {re.escape(name)}:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    match = pattern.search(jobs[1])
+    return None if match is None else match.group("body")
+
+
+def require_job(path_text: str, text: str, name: str, failures: list[str]) -> str | None:
+    body = job_body(text, name)
+    if body is None:
+        fail(f"{path_text}: missing required job {name!r}", failures)
+    return body
+
+
+def step_body_from(job_text: str, name: str) -> str | None:
+    pattern = re.compile(
+        rf"^      - name: {re.escape(name)}\n(?P<body>.*?)(?=^      - name:|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    match = pattern.search(job_text)
+    return None if match is None else match.group("body")
+
+
+def require_step_from(
+    path_text: str,
+    job_text: str,
+    name: str,
+    failures: list[str],
+) -> str | None:
+    body = step_body_from(job_text, name)
+    if body is None:
+        fail(f"{path_text}: missing required step {name!r}", failures)
+    return body
+
+
+def validate_revision_steps(
+    path_text: str,
+    job_text: str,
+    resolution_name: str,
+    checkout_name: str,
+    proof_name: str,
+    failures: list[str],
+) -> None:
+    resolution = require_step_from(path_text, job_text, resolution_name, failures)
+    checkout = require_step_from(path_text, job_text, checkout_name, failures)
+    proof = require_step_from(path_text, job_text, proof_name, failures)
+    if None in (resolution, checkout, proof):
+        return
+
+    for fragment in (
+        "EVENT_NAME: ${{ github.event_name }}",
+        "EVENT_SHA: ${{ github.sha }}",
+        "PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+        "PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+        'if [[ -z "${expected_revision}" ]]',
+        "Unsupported caller event:",
+        EXPECTED_REVISION_OUTPUT,
+        "pull_request_base_revision=${PULL_REQUEST_BASE_SHA}",
+    ):
+        if fragment not in resolution:
+            fail(f"{path_text}: expected-revision resolution missing {fragment!r}", failures)
+
+    expected_revision_cases = [
+        'pull_request) expected_revision="${PULL_REQUEST_HEAD_SHA}" ;;',
+        'merge_group) expected_revision="${EVENT_SHA}" ;;',
+        'push|workflow_dispatch) expected_revision="${EVENT_SHA}" ;;',
+    ]
+    actual_revision_cases = [
+        line.strip()
+        for line in resolution.splitlines()
+        if "expected_revision=" in line and line.strip().endswith(";;")
+    ]
+    if actual_revision_cases != expected_revision_cases:
+        fail(
+            f"{path_text}: expected exact revision event mapping "
+            f"{expected_revision_cases}, found {actual_revision_cases}",
+            failures,
+        )
+
+    if EXPECTED_REVISION_REF not in checkout:
+        fail(f"{path_text}: checkout must explicitly use the resolved expected revision", failures)
+
+    for fragment in (
+        'actual_revision="$(git rev-parse HEAD)"',
+        '[[ "${actual_revision}" != "${EXPECTED_REVISION}" ]]',
+        "Expected revision:",
+        "Actual checked-out revision:",
+        "Conclusion:",
+    ):
+        if fragment not in proof:
+            fail(f"{path_text}: checkout identity proof missing {fragment!r}", failures)
+
+
+def validate_rust_partition_contract(text: str, failures: list[str]) -> None:
+    path_text = relative(RUST_WORKFLOW)
+    jobs = text.split("\njobs:\n", 1)
+    if len(jobs) != 2:
+        fail(f"{path_text}: missing jobs mapping", failures)
+        return
+
+    job_ids = re.findall(r"^  ([a-z][a-z0-9_-]*):\n", jobs[1], re.MULTILINE)
+    expected_job_ids = ["plan", "validate", "aggregate"]
+    if job_ids != expected_job_ids:
+        fail(
+            f"{path_text}: Rust workflow jobs must remain exactly "
+            f"{expected_job_ids}, found {job_ids}",
+            failures,
+        )
+
+    plan = require_job(path_text, text, "plan", failures)
+    validate = require_job(path_text, text, "validate", failures)
+    aggregate = require_job(path_text, text, "aggregate", failures)
+    if None in (plan, validate, aggregate):
+        return
+
+    for fragment in (
+        "name: Plan repository validation",
+        "runs-on: ubuntu-latest",
+        "timeout-minutes: 10",
+        "expected_revision: ${{ steps.revision.outputs.expected_revision }}",
+        "pull_request_base_revision: ${{ steps.revision.outputs.pull_request_base_revision }}",
+        "matrix: ${{ steps.partitions.outputs.matrix }}",
+    ):
+        if fragment not in plan:
+            fail(f"{path_text}: planning job missing {fragment!r}", failures)
+
+    validate_revision_steps(
+        path_text,
+        plan,
+        "Resolve expected caller revision for planning",
+        "Check out caller repository for planning",
+        "Prove planned caller revision",
+        failures,
+    )
+
+    partitions = require_step_from(path_text, plan, "Plan validation partitions", failures)
+    if partitions is not None:
+        for fragment in (
+            'MANIFEST = Path("validation-partitions.txt")',
+            "MAX_MANIFEST_BYTES = 512",
+            f"MAX_PARTITIONS = {MAX_RUST_PARTITIONS}",
+            'PARTITION_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")',
+            'RESERVED_IDS = {"complete"}',
+            "if MANIFEST.is_symlink():",
+            "if not MANIFEST.exists():",
+            "if not MANIFEST.is_file():",
+            "if len(raw) > MAX_MANIFEST_BYTES:",
+            'if raw and not raw.endswith(b"\\n"):',
+            'raw.decode("utf-8")',
+            'entries = [{"mode": "complete", "id": "complete"}]',
+            "if not 1 <= len(partitions) <= MAX_PARTITIONS:",
+            "if len(set(partitions)) != len(partitions):",
+            "if partition != partition.strip():",
+            "if not PARTITION_RE.fullmatch(partition):",
+            "if partition in RESERVED_IDS:",
+            'entries = [{"mode": "partition", "id": partition} for partition in partitions]',
+            'matrix = json.dumps({"include": entries}, separators=(",", ":"))',
+            'Path(os.environ["GITHUB_OUTPUT"])',
+            'output.write(f"matrix={matrix}\\n")',
+        ):
+            if fragment not in partitions:
+                fail(f"{path_text}: partition planning missing {fragment!r}", failures)
+
+    for fragment in (
+        "name: Validation / ${{ matrix.id }}",
+        "needs: plan",
+        "runs-on: ubuntu-latest",
+        "timeout-minutes: 60",
+        "fail-fast: false",
+        "matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}",
+    ):
+        if fragment not in validate:
+            fail(f"{path_text}: validation matrix job missing {fragment!r}", failures)
+
+    checkout = require_step_from(
+        path_text, validate, "Check out caller repository for validation", failures
+    )
+    proof = require_step_from(
+        path_text, validate, "Prove validation caller revision", failures
+    )
+    if checkout is not None and "ref: ${{ needs.plan.outputs.expected_revision }}" not in checkout:
+        fail(
+            f"{path_text}: validation checkout must use the planned expected revision",
+            failures,
+        )
+    if proof is not None:
+        for fragment in (
+            "EXPECTED_REVISION: ${{ needs.plan.outputs.expected_revision }}",
+            "PULL_REQUEST_BASE_REVISION: ${{ needs.plan.outputs.pull_request_base_revision }}",
+            'actual_revision="$(git rev-parse HEAD)"',
+            '[[ "${actual_revision}" != "${EXPECTED_REVISION}" ]]',
+            "Expected revision:",
+            "Actual checked-out revision:",
+            "Conclusion:",
+        ):
+            if fragment not in proof:
+                fail(f"{path_text}: validation revision proof missing {fragment!r}", failures)
+
+    validation = require_step_from(
+        path_text, validate, "Run repository validation authority", failures
+    )
+    if validation is not None:
+        for fragment in (
+            "EXPECTED_REVISION: ${{ needs.plan.outputs.expected_revision }}",
+            "PULL_REQUEST_BASE_REVISION: ${{ needs.plan.outputs.pull_request_base_revision }}",
+            "VALIDATION_MODE: ${{ matrix.mode }}",
+            "VALIDATION_PARTITION: ${{ matrix.id }}",
+            "validation_args=()",
+            'if [[ "${VALIDATION_PARTITION}" != "complete" ]]',
+            'if [[ ! "${VALIDATION_PARTITION}" =~ ^[a-z][a-z0-9-]{0,31}$ ]]',
+            '[[ "${VALIDATION_PARTITION}" == "complete" ]]',
+            'validation_args=(--partition "${VALIDATION_PARTITION}")',
+            EXPECTED_RUST_MATRIX_COMMAND + ' >"${log_path}" 2>&1',
+        ):
+            if fragment not in validation:
+                fail(f"{path_text}: partition execution missing {fragment!r}", failures)
+
+    artifact = require_step_from(path_text, validate, "Upload validation diagnostics", failures)
+    if artifact is not None:
+        for fragment in (
+            "if: failure()",
+            "name: rust-repository-validation-${{ matrix.id }}-diagnostics",
+            "path: ${{ runner.temp }}/rust-repository-validation-${{ matrix.id }}.log",
+            "if-no-files-found: error",
+            "retention-days: 3",
+        ):
+            if fragment not in artifact:
+                fail(f"{path_text}: matrix diagnostics missing {fragment!r}", failures)
+
+    cleanup = require_step_from(path_text, validate, "Remove validation diagnostics", failures)
+    if cleanup is not None:
+        for fragment in (
+            "if: always()",
+            'rm -f "${RUNNER_TEMP}"/rust-repository-validation-*.log',
+        ):
+            if fragment not in cleanup:
+                fail(f"{path_text}: matrix cleanup missing {fragment!r}", failures)
+
+    for fragment in (
+        "name: Repository baseline",
+        "needs: [plan, validate]",
+        "if: always()",
+        "runs-on: ubuntu-latest",
+        "timeout-minutes: 5",
+        "PLAN_RESULT: ${{ needs.plan.result }}",
+        "VALIDATE_RESULT: ${{ needs.validate.result }}",
+        'if [[ "${PLAN_RESULT}" != "success" || "${VALIDATE_RESULT}" != "success" ]]',
+        'echo "Conclusion: FAIL"',
+        'echo "Conclusion: PASS"',
+    ):
+        if fragment not in aggregate:
+            fail(f"{path_text}: aggregate job missing {fragment!r}", failures)
+
+
+def validate_rust_diagnostic_contract(text: str, failures: list[str]) -> None:
+    path_text = relative(RUST_WORKFLOW)
+    validation = require_step(path_text, text, "Run repository validation authority", failures)
+    if validation is None:
+        return
+
+    rust_validation_lines = [
+        line.strip()
+        for line in text.splitlines()
+        if VALIDATE_COMMAND_RE.match(line.strip())
+    ]
+    expected_line = EXPECTED_RUST_MATRIX_COMMAND + ' >"${log_path}" 2>&1'
+    if rust_validation_lines != [expected_line]:
+        fail(
+            f"{path_text}: expected exactly one fixed Rust validation invocation, "
+            f"found {rust_validation_lines}",
+            failures,
+        )
+
+    success_marker = 'echo "Conclusion: PASS"'
+    failure_marker = 'echo "Conclusion: FAIL"'
+    status_marker = "validation_status=$?"
+    success_branch_marker = 'if [[ "${validation_status}" -eq 0 ]]'
+    final_exit_marker = 'exit "${validation_status}"'
+    tail_marker = f"tail -n {DIAGNOSTIC_TAIL_LIMIT}"
+    status_index = validation.find(status_marker)
+    success_branch_index = validation.find(success_branch_marker)
+    success_index = validation.find(success_marker)
+    failure_index = validation.find(failure_marker)
+    final_exit_index = validation.rfind(final_exit_marker)
+    tail_index = validation.find(tail_marker)
+    if min(
+        status_index,
+        success_branch_index,
+        success_index,
+        failure_index,
+        final_exit_index,
+        tail_index,
+    ) < 0:
+        fail(f"{path_text}: Rust validation result record is incomplete", failures)
+        return
+
+    for fragment in (
+        'log_path="${RUNNER_TEMP}/rust-repository-validation-${VALIDATION_PARTITION}.log"',
+        status_marker,
+        success_branch_marker,
+        success_marker,
+        f"head -n {DIAGNOSTIC_LINE_LIMIT}",
+        tail_marker,
+        'echo "Canonical command: ${command_label}"',
+        'echo "Validation exit status: ${validation_status}"',
+        'echo "Complete diagnostics: rust-repository-validation-${VALIDATION_PARTITION}-diagnostics artifact (3-day retention)"',
+        final_exit_marker,
+    ):
+        if fragment not in validation:
+            fail(f"{path_text}: Rust diagnostics contract missing {fragment!r}", failures)
+
+    if not (
+        status_index < success_branch_index < success_index < failure_index < final_exit_index
+    ):
+        fail(f"{path_text}: Rust validation result ordering must preserve status", failures)
+    if "tee" in validation or "cat " in validation:
+        fail(f"{path_text}: complete Rust validation output must not stream to console", failures)
+    if success_branch_index > tail_index:
+        fail(f"{path_text}: successful Rust validation must not print complete diagnostics", failures)
 
 
 def validate_rust_cargo_cache(text: str, failures: list[str]) -> None:
@@ -643,15 +982,8 @@ def validate_workflows(failures: list[str]) -> None:
                 fail(f"{path_text}: diagnostic path must remain outside checkout: {fragment}", failures)
         if WORKFLOW_INPUT_RE.search(rust_text):
             fail(f"{path_text}: inputs and secrets are forbidden for the fixed Rust profile", failures)
-        validate_revision_contract(RUST_WORKFLOW, rust_text, failures)
-        validate_diagnostic_contract(
-            RUST_WORKFLOW,
-            rust_text,
-            EXPECTED_RUST_COMMAND,
-            "rust-repository-validation.log",
-            "rust-repository-validation-diagnostics",
-            failures,
-        )
+        validate_rust_partition_contract(rust_text, failures)
+        validate_rust_diagnostic_contract(rust_text, failures)
         validate_rust_success_summary(rust_text, failures)
         validate_rust_cargo_cache(rust_text, failures)
         validate_rust_compiler_cache(rust_text, failures)
@@ -722,22 +1054,28 @@ def validate_documented_contract(failures: list[str]) -> None:
         ),
         "docs/contract.md": (
             "## Dependency and checkout contract",
+            "## Rust partition contract",
             "## Python documentation profile",
             "pull-request callers validate `github.event.pull_request.head.sha`",
             "compact success evidence",
             "caller-declared `rust-version` values",
             "temporary archive under `RUNNER_TEMP`",
-            "rust-repository-validation-diagnostics",
+            "validation-partitions.txt",
+            "Repository baseline",
             "python-repository-validation-diagnostics",
         ),
         "docs/security.md": (
             "full commit SHA",
             "persist-credentials: false",
             "resolve the caller revision from the triggering event",
+            "validation-partitions.txt",
+            "at most four",
         ),
         "docs/versioning.md": (
             "External Action updates are proposed by Dependabot",
             "Action dependencies",
+            "partition-aware",
+            "RunenUI",
         ),
     }
     for path_text, fragments in checks.items():

@@ -26,25 +26,58 @@ It must not:
 
 ## Rust validation profile
 
-The maintained Rust workflow has one fixed profile:
+The maintained Rust workflow has one fixed execution profile:
 
-- GitHub-hosted Ubuntu runner;
+- GitHub-hosted Ubuntu runners;
 - exact clean checkout with shallow history and no persisted credential;
-- stable Rust with `rustfmt` and `clippy`;
+- a checkout-only planning job that resolves and proves the expected caller revision before reading partition inventory;
+- stable Rust with `rustfmt` and `clippy` on every validation runner;
 - each unique caller-declared `rust-version` value reported by Cargo metadata is installed with `rustfmt` and `clippy`; a caller that declares none receives no additional Rust toolchain;
 - Cargo metadata discovery runs from an exact temporary archive under `RUNNER_TEMP`, so environment provisioning does not generate or update files in the caller checkout;
 - Cargo registry/download caching without restoring workspace `target/` artifacts, under an explicit source-fresh cache-policy generation that cannot reuse archives from the retired workspace-target policy;
 - source-addressed Rust compiler-output caching through the reviewed sccache setup, with `CARGO_INCREMENTAL=0`, `SCCACHE_GHA_ENABLED=on`, and `RUSTC_WRAPPER=sccache` scoped to repository validation;
 - no shared-workflow override of GitHub cache access mode or sccache GHA read/write mode; caller/event cache-token scope remains authoritative;
-- `cargo +stable validate` as the only validation invocation;
-- compact success evidence naming the repository, event, expected and actual revisions, canonical command, and conclusion, plus at most the final 40 validation-log lines as a bounded success summary;
+- `fail-fast: false` across partition validation so independent failures remain visible;
+- one stable `Repository baseline` aggregate that succeeds only when planning and every required validation runner succeed;
+- compact success evidence naming the repository, event, expected and actual revisions, effective canonical command, and conclusion, plus at most the final 40 validation-log lines as a bounded success summary;
 - successful validation never streams or uploads the complete captured log;
-- up to 40 selected diagnostic lines and 160 final log lines on failure, with the complete out-of-tree log below `RUNNER_TEMP` retained in the `rust-repository-validation-diagnostics` artifact for three days;
-- cleanup of the out-of-tree log on every result.
+- up to 40 selected diagnostic lines and 160 final log lines on failure, with a collision-free complete out-of-tree log below `RUNNER_TEMP` retained for three days;
+- cleanup of out-of-tree validation logs on every result.
+
+## Rust partition contract
+
+A caller may place `validation-partitions.txt` at the repository root to expose
+repository-owned execution partitions. Caller workflow YAML does not pass a partition
+count or list.
+
+When the manifest is absent, the generated validation matrix contains one `complete`
+entry and invokes `cargo +stable validate`. When the manifest is present, it contains
+one partition identifier per line and each validation runner invokes the same canonical
+Cargo alias with `--partition <id>`.
+
+The workflow treats manifest content as untrusted orchestration data:
+
+- the manifest must be a regular UTF-8 file ending in a newline and no larger than 512 bytes;
+- it contains between one and four unique identifiers;
+- identifiers match `[a-z][a-z0-9-]{0,31}`;
+- `complete` is reserved for the serial fallback;
+- blank lines, surrounding whitespace, duplicates, malformed identifiers, symlinks, and oversized inventories fail planning;
+- matrix runners revalidate their mode and identifier before constructing an argument array;
+- identifiers are never evaluated as shell or accepted as commands, paths, runners, toolchains, scripts, working directories, or secrets.
+
+The repository remains authoritative for partition membership and for proving that the
+complete set of partitions is semantically equivalent to its complete canonical
+invocation. The shared workflow does not infer lanes or decide that a repository check
+may be omitted.
+
+The planning job resolves and proves the exact caller revision once; every matrix
+runner independently checks out and proves that same selected revision. No validation partition may rely on another partition's mutable workspace or
+build artifacts for correctness. The aggregate `Repository baseline` fails when
+planning fails or when required validation is failed, skipped, or cancelled.
 
 Canonical validation must compile caller workspace artifacts from the checked-out exact source revision. Shared workspace `target/` artifacts are therefore not restored by the reusable workflow. The Cargo-data cache prefix is a cache-policy generation: any change that could alter which caller files are restored must use a new generation rather than sharing keys with an older policy. Compiler-cache reuse occurs only at individual rustc invocations through sccache; it must not restore Cargo fingerprint state, test executables, or another revision's workspace `target/` tree.
 
-The workflow supplies stable Rust plus caller-declared `rust-version` values required by checked-out Cargo metadata. The caller remains authoritative for whether an MSRV is declared, which version is declared, and whether or how canonical validation exercises that version. The caller's `.cargo/config.toml`, `xtask`, lockfiles, tests, documentation checks, policy checks, and clean-state proof remain the validation authority.
+The workflow supplies stable Rust plus caller-declared `rust-version` values required by checked-out Cargo metadata. The caller remains authoritative for whether an MSRV is declared, which version is declared, and whether or how canonical validation exercises that version. The caller's `.cargo/config.toml`, `xtask`, lockfiles, tests, documentation checks, policy checks, partition manifest, and clean-state proof remain the validation authority.
 
 ## Python documentation profile
 

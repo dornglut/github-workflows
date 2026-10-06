@@ -70,8 +70,8 @@ complete set of partitions is semantically equivalent to its complete canonical
 invocation. The shared workflow does not infer lanes or decide that a repository check
 may be omitted.
 
-Every matrix runner independently resolves, checks out, and proves the same exact caller
-revision. No validation partition may rely on another partition's mutable workspace or
+The planning job resolves and proves the exact caller revision once; every matrix
+runner independently checks out and proves that same selected revision. No validation partition may rely on another partition's mutable workspace or
 build artifacts for correctness. The aggregate `Repository baseline` fails when
 planning fails or when required validation is failed, skipped, or cancelled.
 

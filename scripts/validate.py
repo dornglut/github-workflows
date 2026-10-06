@@ -490,6 +490,8 @@ def validate_rust_partition_contract(text: str, failures: list[str]) -> None:
         "name: Plan repository validation",
         "runs-on: ubuntu-latest",
         "timeout-minutes: 10",
+        "expected_revision: ${{ steps.revision.outputs.expected_revision }}",
+        "pull_request_base_revision: ${{ steps.revision.outputs.pull_request_base_revision }}",
         "matrix: ${{ steps.partitions.outputs.matrix }}",
     ):
         if fragment not in plan:
@@ -543,22 +545,37 @@ def validate_rust_partition_contract(text: str, failures: list[str]) -> None:
         if fragment not in validate:
             fail(f"{path_text}: validation matrix job missing {fragment!r}", failures)
 
-    validate_revision_steps(
-        path_text,
-        validate,
-        "Resolve expected caller revision for validation",
-        "Check out caller repository for validation",
-        "Prove validation caller revision",
-        failures,
+    checkout = require_step_from(
+        path_text, validate, "Check out caller repository for validation", failures
     )
+    proof = require_step_from(
+        path_text, validate, "Prove validation caller revision", failures
+    )
+    if checkout is not None and "ref: ${{ needs.plan.outputs.expected_revision }}" not in checkout:
+        fail(
+            f"{path_text}: validation checkout must use the planned expected revision",
+            failures,
+        )
+    if proof is not None:
+        for fragment in (
+            "EXPECTED_REVISION: ${{ needs.plan.outputs.expected_revision }}",
+            "PULL_REQUEST_BASE_REVISION: ${{ needs.plan.outputs.pull_request_base_revision }}",
+            'actual_revision="$(git rev-parse HEAD)"',
+            '[[ "${actual_revision}" != "${EXPECTED_REVISION}" ]]',
+            "Expected revision:",
+            "Actual checked-out revision:",
+            "Conclusion:",
+        ):
+            if fragment not in proof:
+                fail(f"{path_text}: validation revision proof missing {fragment!r}", failures)
 
     validation = require_step_from(
         path_text, validate, "Run repository validation authority", failures
     )
     if validation is not None:
         for fragment in (
-            "EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}",
-            "PULL_REQUEST_BASE_REVISION: ${{ steps.revision.outputs.pull_request_base_revision }}",
+            "EXPECTED_REVISION: ${{ needs.plan.outputs.expected_revision }}",
+            "PULL_REQUEST_BASE_REVISION: ${{ needs.plan.outputs.pull_request_base_revision }}",
             "VALIDATION_MODE: ${{ matrix.mode }}",
             "VALIDATION_PARTITION: ${{ matrix.id }}",
             "validation_args=()",

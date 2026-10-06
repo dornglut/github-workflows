@@ -9,7 +9,7 @@ Current workflows:
 - do not run on `pull_request_target`;
 - do not perform deployment or release operations;
 - do not accept arbitrary command, script, toolchain, runner, or path inputs;
-- resolve the caller revision from the triggering event, select it explicitly, and prove the checked-out SHA before partition planning and independently on every validation runner;
+- resolve the caller revision from the triggering event in the planning job, prove that checkout, and require every validation runner to independently check out and prove the same selected SHA;
 - treat `validation-partitions.txt` as untrusted bounded data: regular UTF-8 file only, at most four narrow identifiers, no shell/script/path/runner/toolchain interpretation, and runner-side identifier revalidation;
 - use clean shallow checkout with `persist-credentials: false`;
 - keep diagnostic files below `RUNNER_TEMP`, outside the caller checkout;

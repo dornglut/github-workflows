@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
+      expected_revision: ${{ steps.revision.outputs.expected_revision }}
+      pull_request_base_revision: ${{ steps.revision.outputs.pull_request_base_revision }}
       matrix: ${{ steps.partitions.outputs.matrix }}
     steps:
       - name: Resolve expected caller revision for planning
@@ -148,47 +150,19 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
-      - name: Resolve expected caller revision for validation
-        id: revision
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_SHA: ${{ github.sha }}
-          PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          case "${EVENT_NAME}" in
-            pull_request) expected_revision="${PULL_REQUEST_HEAD_SHA}" ;;
-            merge_group) expected_revision="${EVENT_SHA}" ;;
-            push|workflow_dispatch) expected_revision="${EVENT_SHA}" ;;
-            *)
-              echo "Unsupported caller event: ${EVENT_NAME}" >&2
-              exit 1
-              ;;
-          esac
-          if [[ -z "${expected_revision}" ]]; then
-            echo "Expected caller revision is empty for event: ${EVENT_NAME}" >&2
-            exit 1
-          fi
-          {
-            echo "expected_revision=${expected_revision}"
-            echo "pull_request_base_revision=${PULL_REQUEST_BASE_SHA}"
-          } >> "${GITHUB_OUTPUT}"
-
       - name: Check out caller repository for validation
         uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
         with:
           clean: true
           fetch-depth: 1
           persist-credentials: false
-          ref: ${{ steps.revision.outputs.expected_revision }}
+          ref: ${{ needs.plan.outputs.expected_revision }}
 
       - name: Prove validation caller revision
         shell: bash
         env:
-          EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}
-          PULL_REQUEST_BASE_REVISION: ${{ steps.revision.outputs.pull_request_base_revision }}
+          EXPECTED_REVISION: ${{ needs.plan.outputs.expected_revision }}
+          PULL_REQUEST_BASE_REVISION: ${{ needs.plan.outputs.pull_request_base_revision }}
         run: |
           set -euo pipefail
           actual_revision="$(git rev-parse HEAD)"
@@ -251,8 +225,8 @@ jobs:
       - name: Run repository validation authority
         shell: bash
         env:
-          EXPECTED_REVISION: ${{ steps.revision.outputs.expected_revision }}
-          PULL_REQUEST_BASE_REVISION: ${{ steps.revision.outputs.pull_request_base_revision }}
+          EXPECTED_REVISION: ${{ needs.plan.outputs.expected_revision }}
+          PULL_REQUEST_BASE_REVISION: ${{ needs.plan.outputs.pull_request_base_revision }}
           VALIDATION_MODE: ${{ matrix.mode }}
           VALIDATION_PARTITION: ${{ matrix.id }}
           CARGO_INCREMENTAL: "0"

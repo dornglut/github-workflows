@@ -221,13 +221,21 @@ jobs:
       # the upstream optional compiler-cache binary release is unavailable.
       # Product-level GitHub Actions jobs already run direct rustc for groups.
       - name: Set up Rust compiler cache
+        id: sccache_setup
         if: github.event_name != 'merge_group'
+        # Only this optional performance step may recover from setup failure.
+        # The pinned Action's built-in post hook uses SCCACHE_PATH even if
+        # installation failed, so disable it and report stats separately.
+        continue-on-error: true
         uses: "Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba" # v0.0.11
         with:
           version: "v0.18.0"
+          disable_annotations: "true"
 
       - name: Configure Rust compiler cache
         shell: bash
+        env:
+          CACHE_SETUP_OUTCOME: ${{ steps.sccache_setup.outcome }}
         run: |
           set -euo pipefail
           case "${GITHUB_EVENT_NAME}" in
@@ -235,10 +243,15 @@ jobs:
               echo "Compiler cache: skipped for merge_group; using direct rustc"
               ;;
             pull_request|push|workflow_dispatch)
-              {
-                echo "SCCACHE_GHA_ENABLED=on"
-                echo "RUSTC_WRAPPER=sccache"
-              } >> "${GITHUB_ENV}"
+              if [[ "${CACHE_SETUP_OUTCOME}" == "success" ]] && command -v sccache >/dev/null; then
+                {
+                  echo "SCCACHE_GHA_ENABLED=on"
+                  echo "RUSTC_WRAPPER=sccache"
+                } >> "${GITHUB_ENV}"
+                echo "Compiler cache: installed; source-addressed sccache enabled"
+              else
+                echo "Compiler cache: unavailable (${CACHE_SETUP_OUTCOME}); using direct rustc"
+              fi
               ;;
             *)
               echo "Unsupported validation event: ${GITHUB_EVENT_NAME}" >&2
@@ -333,6 +346,14 @@ jobs:
       - name: Remove validation diagnostics
         if: always()
         run: rm -f "${RUNNER_TEMP}"/rust-repository-validation-*.log
+
+      - name: Report Rust compiler cache stats
+        if: always() && steps.sccache_setup.outcome == 'success'
+        shell: bash
+        run: |
+          if command -v sccache >/dev/null; then
+            sccache --show-stats || echo "Compiler cache statistics unavailable"
+          fi
 
   aggregate:
     name: Repository baseline

@@ -728,8 +728,9 @@ def validate_rust_cargo_cache(text: str, failures: list[str]) -> None:
 def validate_rust_compiler_cache(text: str, failures: list[str]) -> None:
     path_text = relative(RUST_WORKFLOW)
     setup = require_step(path_text, text, "Set up Rust compiler cache", failures)
+    configure = require_step(path_text, text, "Configure Rust compiler cache", failures)
     validation = require_step(path_text, text, "Run repository validation authority", failures)
-    if setup is None or validation is None:
+    if setup is None or configure is None or validation is None:
         return
 
     expected_action = (
@@ -740,19 +741,44 @@ def validate_rust_compiler_cache(text: str, failures: list[str]) -> None:
     for fragment in (expected_action, expected_version):
         if fragment not in setup:
             fail(f"{path_text}: compiler-cache setup missing {fragment!r}", failures)
+    # Never fetch the optional binary on a merge-group revision. A setup
+    # failure there must not prevent the exact queued source from compiling.
+    if setup.count("if: github.event_name != 'merge_group'") != 1:
+        fail(
+            f"{path_text}: compiler-cache setup must exclude merge_group exactly",
+            failures,
+        )
 
     setup_index = text.find("      - name: Set up Rust compiler cache")
+    configure_index = text.find("      - name: Configure Rust compiler cache")
     validation_index = text.find("      - name: Run repository validation authority")
-    if setup_index < 0 or validation_index < 0 or setup_index >= validation_index:
-        fail(f"{path_text}: compiler cache must be configured before validation", failures)
+    if not (0 <= setup_index < configure_index < validation_index):
+        fail(f"{path_text}: compiler cache setup/selection must precede validation", failures)
 
     for fragment in (
-        'CARGO_INCREMENTAL: "0"',
-        'SCCACHE_GHA_ENABLED: "on"',
-        'RUSTC_WRAPPER: "sccache"',
+        "set -euo pipefail",
+        'case "${GITHUB_EVENT_NAME}" in',
+        "merge_group)",
+        'echo "Compiler cache: skipped for merge_group; using direct rustc"',
+        "pull_request|push|workflow_dispatch)",
+        'echo "SCCACHE_GHA_ENABLED=on"',
+        'echo "RUSTC_WRAPPER=sccache"',
+        '} >> "${GITHUB_ENV}"',
+        'echo "Unsupported validation event: ${GITHUB_EVENT_NAME}" >&2',
+        "exit 1",
+        "esac",
     ):
-        if fragment not in validation:
-            fail(f"{path_text}: validation compiler-cache environment missing {fragment!r}", failures)
+        if fragment not in configure:
+            fail(f"{path_text}: compiler-cache mode selection missing {fragment!r}", failures)
+    if configure.count("RUSTC_WRAPPER=sccache") != 1:
+        fail(f"{path_text}: compiler wrapper selection must occur once", failures)
+    if 'RUSTC_WRAPPER:' in validation or 'SCCACHE_GHA_ENABLED:' in validation:
+        fail(
+            f"{path_text}: canonical validation must not set an unconditional compiler wrapper",
+            failures,
+        )
+    if 'CARGO_INCREMENTAL: "0"' not in validation:
+        fail(f"{path_text}: Rust incremental compilation must remain disabled", failures)
 
     if "cache-mode:" in text:
         fail(

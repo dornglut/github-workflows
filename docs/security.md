@@ -15,6 +15,7 @@ Current workflows:
 - keep diagnostic files below `RUNNER_TEMP`, outside the caller checkout;
 - print only bounded diagnostics and upload the complete short-retention validation log only after failure;
 - pin every external Action to a full commit SHA with an inline release comment;
+- keep Rust `merge_group` validation independent of optional compiler-cache binary acquisition: skip the sccache Action and wrapper for merge groups while preserving full exact-revision canonical validation;
 - receive Action dependency updates through reviewed Dependabot pull requests.
 
 A full commit SHA is the immutable dependency boundary. Release tags in comments are documentation and update metadata, not executable references.

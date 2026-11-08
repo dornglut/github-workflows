@@ -249,7 +249,19 @@ def validate_workflow_baseline(path: Path, failures: list[str]) -> str | None:
     if "contents: read" not in text:
         fail(f"{path_text}: must declare contents: read", failures)
     if "continue-on-error:" in text:
-        fail(f"{path_text}: continue-on-error is forbidden", failures)
+        # Cache installation is an optional optimization. Only its pinned
+        # setup step may degrade; no validation or aggregate status may.
+        setup = step_body(text, "Set up Rust compiler cache") if path == RUST_WORKFLOW else None
+        if (
+            setup is None
+            or text.count("continue-on-error:") != 1
+            or text.count("continue-on-error: true") != 1
+            or setup.count("continue-on-error: true") != 1
+        ):
+            fail(
+                f"{path_text}: continue-on-error is only allowed for Rust cache setup",
+                failures,
+            )
     if "secrets: inherit" in text:
         fail(f"{path_text}: inherited secrets are forbidden", failures)
     if "persist-credentials: true" in text:
@@ -730,7 +742,8 @@ def validate_rust_compiler_cache(text: str, failures: list[str]) -> None:
     setup = require_step(path_text, text, "Set up Rust compiler cache", failures)
     configure = require_step(path_text, text, "Configure Rust compiler cache", failures)
     validation = require_step(path_text, text, "Run repository validation authority", failures)
-    if setup is None or configure is None or validation is None:
+    stats = require_step(path_text, text, "Report Rust compiler cache stats", failures)
+    if setup is None or configure is None or validation is None or stats is None:
         return
 
     expected_action = (
@@ -738,7 +751,13 @@ def validate_rust_compiler_cache(text: str, failures: list[str]) -> None:
         'fc920bf0ec8de6ee65d409111f7ec508035751ba" # v0.0.11'
     )
     expected_version = f'version: "{EXPECTED_SCCACHE_VERSION}"'
-    for fragment in (expected_action, expected_version):
+    for fragment in (
+        expected_action,
+        expected_version,
+        "id: sccache_setup",
+        "continue-on-error: true",
+        'disable_annotations: "true"',
+    ):
         if fragment not in setup:
             fail(f"{path_text}: compiler-cache setup missing {fragment!r}", failures)
     # Never fetch the optional binary on a merge-group revision. A setup
@@ -757,13 +776,17 @@ def validate_rust_compiler_cache(text: str, failures: list[str]) -> None:
 
     for fragment in (
         "set -euo pipefail",
+        'CACHE_SETUP_OUTCOME: ${{ steps.sccache_setup.outcome }}',
         'case "${GITHUB_EVENT_NAME}" in',
         "merge_group)",
         'echo "Compiler cache: skipped for merge_group; using direct rustc"',
         "pull_request|push|workflow_dispatch)",
+        'if [[ "${CACHE_SETUP_OUTCOME}" == "success" ]] && command -v sccache >/dev/null; then',
         'echo "SCCACHE_GHA_ENABLED=on"',
         'echo "RUSTC_WRAPPER=sccache"',
         '} >> "${GITHUB_ENV}"',
+        'echo "Compiler cache: installed; source-addressed sccache enabled"',
+        'echo "Compiler cache: unavailable (${CACHE_SETUP_OUTCOME}); using direct rustc"',
         'echo "Unsupported validation event: ${GITHUB_EVENT_NAME}" >&2',
         "exit 1",
         "esac",
@@ -772,6 +795,19 @@ def validate_rust_compiler_cache(text: str, failures: list[str]) -> None:
             fail(f"{path_text}: compiler-cache mode selection missing {fragment!r}", failures)
     if configure.count("RUSTC_WRAPPER=sccache") != 1:
         fail(f"{path_text}: compiler wrapper selection must occur once", failures)
+    if not (
+        configure.index('if [[ "${CACHE_SETUP_OUTCOME}" == "success" ]]')
+        < configure.index('echo "RUSTC_WRAPPER=sccache"')
+        < configure.index('echo "Compiler cache: unavailable')
+    ):
+        fail(f"{path_text}: wrapper selection must be guarded by successful setup", failures)
+    for fragment in (
+        "if: always() && steps.sccache_setup.outcome == 'success'",
+        "command -v sccache",
+        "sccache --show-stats || echo",
+    ):
+        if fragment not in stats:
+            fail(f"{path_text}: optional compiler stats contract missing {fragment!r}", failures)
     if 'RUSTC_WRAPPER:' in validation or 'SCCACHE_GHA_ENABLED:' in validation:
         fail(
             f"{path_text}: canonical validation must not set an unconditional compiler wrapper",

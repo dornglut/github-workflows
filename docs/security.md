@@ -16,6 +16,7 @@ Current workflows:
 - print only bounded diagnostics and upload the complete short-retention validation log only after failure;
 - pin every external Action to a full commit SHA with an inline release comment;
 - keep Rust `merge_group` validation independent of optional compiler-cache binary acquisition: skip the sccache Action and wrapper for merge groups while preserving full exact-revision canonical validation;
+- permit `continue-on-error` only for pinned optional Rust compiler-cache setup, with the Action's unsafe-on-failure post hook disabled; if setup fails, select direct `rustc` and still require the exact same canonical validation command and aggregate result. Cache setup success alone may enable the source-addressed wrapper; all other workflow steps remain fail-closed;
 - receive Action dependency updates through reviewed Dependabot pull requests.
 
 A full commit SHA is the immutable dependency boundary. Release tags in comments are documentation and update metadata, not executable references.

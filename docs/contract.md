@@ -35,7 +35,7 @@ The maintained Rust workflow has one fixed execution profile:
 - each unique caller-declared `rust-version` value reported by Cargo metadata is installed with `rustfmt` and `clippy`; a caller that declares none receives no additional Rust toolchain;
 - Cargo metadata discovery runs from an exact temporary archive under `RUNNER_TEMP`, so environment provisioning does not generate or update files in the caller checkout;
 - Cargo registry/download caching without restoring workspace `target/` artifacts, under an explicit source-fresh cache-policy generation that cannot reuse archives from the retired workspace-target policy;
-- source-addressed Rust compiler-output caching through the reviewed sccache setup, with `CARGO_INCREMENTAL=0`, `SCCACHE_GHA_ENABLED=on`, and `RUSTC_WRAPPER=sccache` scoped to repository validation;
+- source-addressed Rust compiler-output caching through the reviewed fixed sccache setup on `pull_request`, `push`, and `workflow_dispatch` with `CARGO_INCREMENTAL=0`, `SCCACHE_GHA_ENABLED=on`, and `RUSTC_WRAPPER=sccache` scoped to repository validation; `merge_group` explicitly skips optional compiler-cache download and does complete canonical validation with direct `rustc`, so unavailable release assets cannot prevent required merge-queue checks from executing;
 - no shared-workflow override of GitHub cache access mode or sccache GHA read/write mode; caller/event cache-token scope remains authoritative;
 - `fail-fast: false` across partition validation so independent failures remain visible;
 - one stable `Repository baseline` aggregate that succeeds only when planning and every required validation runner succeed;

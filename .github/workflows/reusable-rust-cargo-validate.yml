@@ -217,10 +217,34 @@ jobs:
           prefix-key: "v1-rust-source-fresh"
           cache-targets: false
 
+      # Merge-group proof must run the complete canonical command even when
+      # the upstream optional compiler-cache binary release is unavailable.
+      # Product-level GitHub Actions jobs already run direct rustc for groups.
       - name: Set up Rust compiler cache
+        if: github.event_name != 'merge_group'
         uses: "Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba" # v0.0.11
         with:
           version: "v0.18.0"
+
+      - name: Configure Rust compiler cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${GITHUB_EVENT_NAME}" in
+            merge_group)
+              echo "Compiler cache: skipped for merge_group; using direct rustc"
+              ;;
+            pull_request|push|workflow_dispatch)
+              {
+                echo "SCCACHE_GHA_ENABLED=on"
+                echo "RUSTC_WRAPPER=sccache"
+              } >> "${GITHUB_ENV}"
+              ;;
+            *)
+              echo "Unsupported validation event: ${GITHUB_EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Run repository validation authority
         shell: bash
@@ -230,8 +254,6 @@ jobs:
           VALIDATION_MODE: ${{ matrix.mode }}
           VALIDATION_PARTITION: ${{ matrix.id }}
           CARGO_INCREMENTAL: "0"
-          SCCACHE_GHA_ENABLED: "on"
-          RUSTC_WRAPPER: "sccache"
         run: |
           set -u
           validation_args=()

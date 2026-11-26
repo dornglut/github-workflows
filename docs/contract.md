@@ -108,17 +108,30 @@ unchanged local reusable Rust workflow and exposes the same outer
 `Validate application`, and grant `contents: read` and `actions: read`.
 The extra permission is for GitHub-hosted run evidence only.
 
-The accepted caller owns an explicit `validation-docs.txt` allowlist of audited
-regular Markdown paths. Full and lightweight validation share repository policy;
-the fixed lightweight command is `cargo +stable validate --docs`. The first
-adoption and changes to the allowlist or caller workflow require full validation.
-This profile initially optimizes unpartitioned callers only.
+The accepted caller chooses exactly one audited documentation policy:
+`validation-docs.txt` (explicit regular Markdown paths, existing content edits
+only) or `validation-docs-policy.txt` (exact bytes
+`markdown-namespaces-v1` followed by LF). Namespace mode allows regular
+non-executable Markdown additions, removals and renames at the repository root
+or under `docs/`. It requires bounded ASCII paths without hidden, traversal
+or reserved components; case collisions, directory/leaf collisions, mode/type
+changes and cross-boundary moves select full. The repository must establish
+that executable inputs cannot depend on the presence, absence, names,
+contents or inventory of eligible documents, including future additions.
+A full run alone does not establish that dependency boundary.
+
+Full and lightweight validation share repository policy; the fixed lightweight
+command is `cargo +stable validate --docs`. Initial adoption, migration between
+policies, policy changes and caller workflow changes require full validation.
+This profile optimizes unpartitioned callers only.
 
 The planner checks out the exact event revision. It compares the complete
 tracked-file tree against both accepted executable inputs and independently
 verified successful full-run evidence,
 including file identities and modes, requires unchanged accepted policy, and
-allows only content changes to existing allowlisted files. It requires the same
+evaluates all differences under that policy against both inventories. Namespace
+mode checks the union of paths and every present side of changed leaves.
+It requires the same
 immutable wrapper and full workflow revision, caller path, successful full job
 and aggregate, including exact run ID, attempt and job head SHA. Prior docs-only
 results are not executable evidence. Unmerged code can introduce document

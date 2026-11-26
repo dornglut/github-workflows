@@ -34,6 +34,41 @@ def validate_change_aware(root, failures):
         assert not ns["trusted_policy"](accepted, {**accepted, ns["ALLOWLIST"]: changed}, allowed)
         assert not ns["trusted_policy"](accepted, {**accepted, ns["CALLER"]: changed}, allowed)
         assert not ns["trusted_policy"](accepted, {**accepted, ns["PARTITIONS"]: regular}, allowed)
+        # Namespace mode admits only bounded regular Markdown leaf changes.
+        namespace = ns["namespace_path"]
+        for path in ("README.md", "docs/new.md", "docs/decisions/0002-new.md"):
+            assert namespace(path)
+        for path in (
+            "src/README.md", "docs/.hidden.md", "docs/.hidden/a.md", "docs/a..b.md",
+            "docs/../a.md", "docs/a.MD", "docs/a.txt", "docs/CON.md", "NUL.md",
+            "docs/LPT1/a.md", "docs/ä.md", ".md", "docs/.md", "docs/" + "a" * 129 + ".md",
+        ):
+            assert not namespace(path), path
+        assert diff(old, new, None)
+        assert not diff(old, old, None)
+        assert diff(old, {**old, "docs/new.md": changed}, None)
+        assert diff(old, {"src/main.rs": regular}, None)
+        assert diff(old, {"src/main.rs": regular, "docs/renamed.md": regular}, None)
+        assert not diff(old, {"src/main.rs": regular, "src/renamed.md": regular}, None)
+        assert not diff(old, {**old, "docs/new.md": symlink}, None)
+        assert not diff(old, {**old, "docs/new.md": ("100755", "blob", "b" * 40)}, None)
+        assert not diff(old, {**old, "docs/new.md": ("160000", "commit", "b" * 40)}, None)
+        assert not diff(old, {**old, "README.md": symlink}, None)
+        assert not diff(old, {**old, "readme.md": changed}, None)
+        assert not diff(old, {**old, "docs/a.md": regular, "Docs/b.md": changed}, None)
+        assert not diff(old, {**old, "docs/a.md": regular, "docs/a.md/b.md": changed}, None)
+        assert not diff(
+            {**old, "docs/a.md": regular}, {**old, "docs/a.md/b.md": changed}, None
+        )
+        assert not diff(old, {**new, "src/main.rs": changed}, None)
+        marker = ns["NAMESPACE_POLICY"]
+        namespace_base = {**old, marker: regular, ns["CALLER"]: regular}
+        assert ns["trusted_policy"](namespace_base, namespace_base, None)
+        assert not ns["trusted_policy"](namespace_base, {**namespace_base, marker: changed}, None)
+        assert not ns["trusted_policy"](namespace_base, {**namespace_base, ns["ALLOWLIST"]: regular}, None)
+        assert not ns["trusted_policy"](namespace_base, {**namespace_base, ns["PARTITIONS"]: regular}, None)
+        assert not ns["trusted_policy"](namespace_base, {**namespace_base, ns["CALLER"]: changed}, None)
+        assert not ns["trusted_policy"](namespace_base, {**old, ns["CALLER"]: regular}, None)
         prefix = "Validate application / "
         full = [
             {"name": prefix + "Full validation / Validation / complete", "conclusion": "success", "steps": [
@@ -119,6 +154,51 @@ def validate_change_aware(root, failures):
         assert select(current) is None
         replies["actions/runs/1/attempts/1/jobs?per_page=100"] = {"jobs": full, "total_count": len(full) + 1}
         assert select(current) is None
+        # End-to-end planner: the same accepted full-run evidence supports
+        # addition, removal and rename without a per-file manifest.
+        replies["actions/runs/1/attempts/1/jobs?per_page=100"] = {"jobs": full, "total_count": len(full)}
+        replies["git/trees/" + base_tree_sha + "?recursive=1"] = tree_data(namespace_base)
+        documents[marker] = ns["NAMESPACE_MARKER"]
+        additions = {**namespace_base, "docs/decisions/new.md": changed}
+        removal = {p: v for p, v in namespace_base.items() if p != "README.md"}
+        rename = {**removal, "docs/renamed.md": regular}
+        assert select(additions) == (accepted_sha, 1)
+        assert select(removal) == (accepted_sha, 1)
+        assert select(rename) == (accepted_sha, 1)
+        assert select({**additions, marker: changed}) is None
+        assert select({**additions, ns["ALLOWLIST"]: regular}) is None
+        assert select({**additions, "src/main.rs": changed}) is None
+        assert select({**additions, "docs/unsafe.md": symlink}) is None
+        assert select(additions, "workflow_dispatch") is None
+        assert select(additions, "merge_group") is None
+        documents[marker] = b"markdown-namespaces-v1\r\n"
+        assert select(additions) is None
+        documents[marker] = ns["NAMESPACE_MARKER"]
+        # The prior full-run tree must independently match all executable
+        # inputs, not merely the accepted base.
+        proof_sha = "d" * 40
+        proof_tree_sha = "2" * 40
+        proof_run = {**run, "head_sha": proof_sha}
+        proof_jobs = [{**job, "head_sha": proof_sha} for job in full]
+        replies["actions/workflows/validation.yml/runs?status=success&per_page=20"] = {"workflow_runs": [proof_run]}
+        replies["actions/runs/1"] = proof_run
+        replies["actions/runs/1/attempts/1/jobs?per_page=100"] = {"jobs": proof_jobs, "total_count": len(proof_jobs)}
+        replies["git/commits/" + proof_sha] = {"sha": proof_sha, "tree": {"sha": proof_tree_sha}}
+        replies["git/trees/" + proof_tree_sha + "?recursive=1"] = {
+            **tree_data({**namespace_base, "src/main.rs": changed}), "sha": proof_tree_sha
+        }
+        assert select(additions) is None
+        replies["git/trees/" + proof_tree_sha + "?recursive=1"] = {
+            **tree_data(namespace_base), "sha": proof_tree_sha
+        }
+        assert select(additions) == (proof_sha, 1)
+        replies["git/trees/" + proof_tree_sha + "?recursive=1"]["truncated"] = True
+        try:
+            select(additions)
+        except ValueError:
+            pass  # The workflow entrypoint catches this and selects full.
+        else:
+            raise AssertionError("truncated evidence accepted")
         for required in (
             "needs: [plan, full, docs]", "if: always()", "name: Repository baseline",
             '[[ "$PLAN" == success ]]', '[[ "$FULL" == success && "$DOCS" == skipped ]]',

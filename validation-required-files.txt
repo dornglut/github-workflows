@@ -12,3 +12,5 @@ examples/python-caller.yml
 .github/workflows/validate.yml
 scripts/validate.py
 validation-required-files.txt
+.github/workflows/reusable-rust-change-aware.yml
+scripts/test_change_aware.py

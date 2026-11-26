@@ -97,3 +97,36 @@ The maintained Python workflow has one fixed profile:
 - no workflow inputs, inherited secrets, or generated output.
 
 Caller workflows own event triggers, branch filters, concurrency, and any repository-specific permissions that are stricter than the shared baseline.
+
+## Opt-in change-aware Rust profile
+
+Existing callers retain their immutable complete-validation workflow. The new
+`reusable-rust-change-aware.yml` wrapper delegates full execution to the
+unchanged local reusable Rust workflow and exposes the same outer
+`Repository baseline` result. Opt-in callers use the fixed
+`.github/workflows/validation.yml` path and job display name
+`Validate application`, and grant `contents: read` and `actions: read`.
+The extra permission is for GitHub-hosted run evidence only.
+
+The accepted caller owns an explicit `validation-docs.txt` allowlist of audited
+regular Markdown paths. Full and lightweight validation share repository policy;
+the fixed lightweight command is `cargo +stable validate --docs`. The first
+adoption and changes to the allowlist or caller workflow require full validation.
+This profile initially optimizes unpartitioned callers only.
+
+The planner checks out the exact event revision. It compares the complete
+tracked-file tree against independently verified successful full-run evidence,
+including file identities and modes, requires unchanged accepted policy, and
+allows only content changes to existing allowlisted files. It requires the same
+immutable wrapper and full workflow revision, caller path, successful full job
+and aggregate. Prior docs-only results are not executable evidence. Candidates
+are bounded to recent successful runs on the default branch or the same PR and
+accepted base. Inaccessible, incomplete or ambiguous evidence selects full.
+Manual dispatch and merge-group always select full. No artifacts or executable
+outputs are reused.
+
+The docs job independently proves the selected checkout and records the full
+evidence revision/run. The aggregate accepts exactly the selected successful
+lane and the other skipped lane. A failed or skipped selected lane cannot pass.
+All API access uses the read-only caller token; no caller-supplied command or
+classifier is executed.

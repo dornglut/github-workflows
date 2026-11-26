@@ -1,0 +1,358 @@
+name: Reusable change-aware Rust validation
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    name: Plan change-aware validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      revision: ${{ steps.revision.outputs.revision }}
+      mode: ${{ steps.classify.outputs.mode }}
+      proof_revision: ${{ steps.classify.outputs.proof_revision }}
+      proof_run: ${{ steps.classify.outputs.proof_run }}
+    steps:
+      - name: Resolve exact revision
+        id: revision
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request) revision="$PR_SHA" ;;
+            push|workflow_dispatch|merge_group) revision="$EVENT_SHA" ;;
+            *) exit 1 ;;
+          esac
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact revision for classification
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+        with:
+          clean: true
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ steps.revision.outputs.revision }}
+
+      - name: Classify documentation evidence
+        id: classify
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ steps.revision.outputs.revision }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          SHA = re.compile(r"[0-9a-f]{40}")
+          DOC = re.compile(r"(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.md")
+          ALLOWLIST = "validation-docs.txt"
+          CALLER = ".github/workflows/validation.yml"
+          PARTITIONS = "validation-partitions.txt"
+          WRAPPER = "dornglut/github-workflows/.github/workflows/reusable-rust-change-aware.yml"
+          FULL = "dornglut/github-workflows/.github/workflows/reusable-rust-cargo-validate.yml"
+
+
+          def sha(value):
+              return isinstance(value, str) and SHA.fullmatch(value) is not None
+
+
+          def allowlist(raw):
+              if len(raw) > 8192 or not raw.endswith(b"\n"):
+                  raise ValueError("invalid documentation manifest size or newline")
+              paths = raw.decode("utf-8").splitlines()
+              if not 1 <= len(paths) <= 128 or len(set(paths)) != len(paths):
+                  raise ValueError("invalid documentation manifest inventory")
+              if any(not DOC.fullmatch(p) or p.startswith(".") or ".." in p for p in paths):
+                  raise ValueError("invalid documentation manifest path")
+              return frozenset(paths)
+
+
+          def eligible_difference(previous, current, paths):
+              # Each entry is (mode, type, object SHA). Directories are implicit.
+              if previous.keys() != current.keys():
+                  return False
+              changes = {p for p in current if current[p] != previous[p]}
+              return bool(changes) and changes <= paths and all(
+                  previous[p][:2] == current[p][:2] == ("100644", "blob")
+                  for p in changes
+              )
+
+
+          def trusted_policy(accepted, current, paths):
+              if PARTITIONS in accepted or PARTITIONS in current:
+                  return False
+              for p in (ALLOWLIST, CALLER):
+                  if p not in accepted or accepted[p] != current.get(p):
+                      return False
+                  if accepted[p][:2] != ("100644", "blob"):
+                      return False
+              return all(
+                  accepted.get(p, ())[:2] == current.get(p, ())[:2] == ("100644", "blob")
+                  for p in paths
+              )
+
+
+          def full_jobs(jobs):
+              # An outer success by itself is never executable evidence.
+              def success(name, steps=()):
+                  matches = [j for j in jobs if j.get("name") == name]
+                  if len(matches) != 1 or matches[0].get("conclusion") != "success":
+                      return False
+                  actual = {s.get("name"): s.get("conclusion") for s in matches[0].get("steps", [])}
+                  return all(actual.get(s) == "success" for s in steps)
+
+              prefix = "Validate application / "
+              return (
+                  success(prefix + "Full validation / Validation / complete",
+                          ("Prove validation caller revision", "Run repository validation authority"))
+                  and success(prefix + "Full validation / Repository baseline")
+                  and success(prefix + "Repository baseline")
+              )
+
+
+          def run_matches(run, repo, pin, default, branch, pr, accepted):
+              if not (
+                  run.get("status") == "completed" and run.get("conclusion") == "success"
+                  and run.get("path") == CALLER
+                  and run.get("repository", {}).get("full_name") == repo
+                  and run.get("head_repository", {}).get("full_name") == repo
+                  and sha(run.get("head_sha"))
+                  and type(run.get("id")) is int and run["id"] > 0
+                  and type(run.get("run_attempt")) is int and run["run_attempt"] > 0
+              ):
+                  return False
+              refs = run.get("referenced_workflows") or []
+              if not all(any(
+                  r.get("path") == path + "@" + pin and r.get("sha") == pin
+                  for r in refs
+              ) for path in (WRAPPER, FULL)):
+                  return False
+              if run.get("event") == "push":
+                  return run.get("head_branch") == default
+              if run.get("event") != "pull_request" or not pr or run.get("head_branch") != branch:
+                  return False
+              return any(
+                  p.get("number") == pr and p.get("base", {}).get("sha") == accepted
+                  and p.get("base", {}).get("ref") == default
+                  for p in run.get("pull_requests", [])
+              )
+
+
+          def choose(event, current_sha, api, read, current_tree):
+              repo = event["repository"]["full_name"]
+              default = event["repository"]["default_branch"]
+              if os.environ["GITHUB_EVENT_NAME"] == "pull_request":
+                  pr_data = event["pull_request"]
+                  if pr_data["base"]["ref"] != default or pr_data["head"]["repo"]["full_name"] != repo:
+                      return None
+                  accepted = pr_data["base"]["sha"]
+                  branch = pr_data["head"]["ref"]
+                  pr = event["number"]
+              elif os.environ["GITHUB_EVENT_NAME"] == "push":
+                  if event["ref"] != "refs/heads/" + default:
+                      return None
+                  accepted, branch, pr = event["before"], default, None
+              else:
+                  return None
+              if not sha(accepted) or accepted == "0" * 40 or accepted == current_sha:
+                  return None
+
+              def tree(revision):
+                  if not sha(revision):
+                      raise ValueError("invalid revision")
+                  commit = api("git/commits/" + revision)
+                  if commit["sha"] != revision or not sha(commit["tree"]["sha"]):
+                      raise ValueError("unverified tree identity")
+                  data = api("git/trees/" + commit["tree"]["sha"] + "?recursive=1")
+                  if data["sha"] != commit["tree"]["sha"] or data["truncated"] is not False:
+                      raise ValueError("incomplete tree")
+                  entries = {}
+                  for e in data["tree"]:
+                      if e["type"] == "tree":
+                          continue
+                      if e["path"] in entries or not sha(e["sha"]):
+                          raise ValueError("invalid tree entry")
+                      entries[e["path"]] = (e["mode"], e["type"], e["sha"])
+                  return entries
+
+              baseline = tree(accepted)
+              if ALLOWLIST not in baseline or baseline[ALLOWLIST] != current_tree.get(ALLOWLIST):
+                  return None
+              paths = allowlist(read(ALLOWLIST))
+              if not trusted_policy(baseline, current_tree, paths):
+                  return None
+              caller = read(CALLER).decode("utf-8")
+              pins = re.findall(r"(?m)^\s+uses: " + re.escape(WRAPPER) + r"@([0-9a-f]{40})\s*$", caller)
+              if len(pins) != 1:
+                  return None
+              pin = pins[0]
+              runs = api("actions/workflows/validation.yml/runs?status=success&per_page=20")
+              for run in runs["workflow_runs"][:20]:
+                  if not run_matches(run, repo, pin, default, branch, pr, accepted):
+                      continue
+                  previous = tree(run["head_sha"])
+                  if not eligible_difference(previous, current_tree, paths):
+                      continue
+                  jobs = api(f"actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100")
+                  if jobs["total_count"] != len(jobs["jobs"]) or not full_jobs(jobs["jobs"]):
+                      continue
+                  return run["head_sha"], run["id"]
+              return None
+
+
+          def main():
+              expected = os.environ["EXPECTED_REVISION"]
+              if not sha(expected) or subprocess.check_output(
+                  ["git", "rev-parse", "HEAD"], text=True
+              ).strip() != expected:
+                  raise SystemExit("Exact planning checkout mismatch")
+
+              def read(path):
+                  return Path(path).read_bytes()
+
+              def api(path):
+                  url = os.environ["GITHUB_API_URL"] + "/repos/" + os.environ["GITHUB_REPOSITORY"] + "/" + path
+                  request = urllib.request.Request(url, headers={
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  })
+                  with urllib.request.urlopen(request, timeout=10) as response:
+                      data = response.read(16 * 1024 * 1024 + 1)
+                  if len(data) > 16 * 1024 * 1024:
+                      raise ValueError("oversized API response")
+                  return json.loads(data)
+
+              evidence = None
+              try:
+                  if os.environ["GITHUB_EVENT_NAME"] in ("pull_request", "push"):
+                      event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+                      raw = subprocess.check_output(["git", "ls-tree", "-r", "-z", "HEAD"])
+                      current = {}
+                      for entry in raw.split(b"\0"):
+                          if entry:
+                              meta, name = entry.split(b"\t", 1)
+                              mode, kind, oid = meta.decode("ascii").split()
+                              current[name.decode("utf-8")] = (mode, kind, oid)
+                      evidence = choose(event, expected, api, read, current)
+              except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
+                  # Unavailable/ambiguous evidence never permits omission.
+                  print("Documentation evidence unavailable; selecting complete validation.")
+
+              with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as out:
+                  if evidence is None:
+                      out.write("mode=full\n")
+                  else:
+                      revision, run = evidence
+                      out.write(f"mode=docs\nproof_revision={revision}\nproof_run={run}\n")
+                      print(f"Full validation evidence: {revision}, run {run}; current revision: {expected}")
+
+
+          if __name__ == "__main__":
+              main()
+          PY
+
+  full:
+    name: Full validation
+    needs: plan
+    if: needs.plan.outputs.mode == 'full'
+    uses: ./.github/workflows/reusable-rust-cargo-validate.yml
+    permissions:
+      contents: read
+
+  docs:
+    name: Documentation validation
+    needs: plan
+    if: needs.plan.outputs.mode == 'docs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact documentation revision
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1
+        with:
+          clean: true
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.revision }}
+
+      - name: Validate exact documentation revision
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ needs.plan.outputs.revision }}
+          PROOF_REVISION: ${{ needs.plan.outputs.proof_revision }}
+          PROOF_RUN: ${{ needs.plan.outputs.proof_run }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_REVISION" ]]
+          [[ "$PROOF_REVISION" =~ ^[0-9a-f]{40}$ && "$PROOF_RUN" =~ ^[0-9]+$ ]]
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Event: $GITHUB_EVENT_NAME"
+          echo "Expected and checked-out revision: $EXPECTED_REVISION"
+          echo "Executable evidence: $PROOF_REVISION (run $PROOF_RUN)"
+          rustup toolchain install stable --profile minimal
+          log_path="$RUNNER_TEMP/rust-docs-validation.log"
+          if cargo +stable validate --docs >"$log_path" 2>&1; then
+            tail -n 40 "$log_path"
+            echo "Conclusion: PASS"
+          else
+            status=$?
+            tail -n 160 "$log_path"
+            echo "Conclusion: FAIL"
+            exit "$status"
+          fi
+
+      - name: Upload documentation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rust-docs-validation-diagnostics
+          path: ${{ runner.temp }}/rust-docs-validation.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Remove documentation diagnostics
+        if: always()
+        run: rm -f "$RUNNER_TEMP/rust-docs-validation.log"
+
+  aggregate:
+    name: Repository baseline
+    needs: [plan, full, docs]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require selected validation success
+        shell: bash
+        env:
+          PLAN: ${{ needs.plan.result }}
+          MODE: ${{ needs.plan.outputs.mode }}
+          FULL: ${{ needs.full.result }}
+          DOCS: ${{ needs.docs.result }}
+        run: |
+          set -euo pipefail
+          [[ "$PLAN" == success ]]
+          case "$MODE" in
+            full) [[ "$FULL" == success && "$DOCS" == skipped ]] ;;
+            docs) [[ "$DOCS" == success && "$FULL" == skipped ]] ;;
+            *) exit 1 ;;
+          esac
+          echo "Conclusion: PASS ($MODE)"

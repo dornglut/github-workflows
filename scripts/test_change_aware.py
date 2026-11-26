@@ -5,7 +5,7 @@ import textwrap
 def validate_change_aware(root, failures):
     workflow = (root / ".github/workflows/reusable-rust-change-aware.yml").read_text(encoding="utf-8")
     try:
-        source = workflow.split("          python - <<'PY'\n", 1)[1].split("\n          PY\n", 1)[0]
+        source = workflow.split("          python -I - <<'PY'\n", 1)[1].split("\n          PY\n", 1)[0]
         ns = {"__name__": "classifier_test"}
         exec(compile(textwrap.dedent(source), "<workflow classifier>", "exec"), ns)
         regular = ("100644", "blob", "a" * 40)
@@ -22,7 +22,7 @@ def validate_change_aware(root, failures):
         assert not diff(old, {**new, "extra.md": changed}, allowed)
         assert not diff(old, {**old, "README.md": symlink}, allowed)
         assert not diff(old, {**old, "README.md": ("100755", "blob", "a" * 40)}, allowed)
-        for raw in (b"README.md", b"*.md\n", b"../README.md\n", b"README.md\nREADME.md\n", b"src/main.rs\n", b"README.md\r\n"):
+        for raw in (b"README.md", b"*.md\n", b"../README.md\n", b"README.md\nREADME.md\n", b"src/main.rs\n", b"README.md\r\n", b"docs/.md\n", b"README.md\xc2\x85STATUS.md\n"):
             try:
                 ns["allowlist"](raw)
             except ValueError:
@@ -124,7 +124,8 @@ def validate_change_aware(root, failures):
             '[[ "$PLAN" == success ]]', '[[ "$FULL" == success && "$DOCS" == skipped ]]',
             '[[ "$DOCS" == success && "$FULL" == skipped ]]',
             "cargo +stable validate --docs", "uses: ./.github/workflows/reusable-rust-cargo-validate.yml",
-            "actions: read", "persist-credentials: false",
+            "actions: read", "persist-credentials: false", "python -I -",
+            '["git", "show", "HEAD:" + path]',
         ):
             assert required in workflow, f"missing {required}"
     except (AssertionError, IndexError, KeyError, SyntaxError, ValueError) as error:

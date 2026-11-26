@@ -115,11 +115,15 @@ adoption and changes to the allowlist or caller workflow require full validation
 This profile initially optimizes unpartitioned callers only.
 
 The planner checks out the exact event revision. It compares the complete
-tracked-file tree against both accepted executable inputs and independently verified successful full-run evidence,
+tracked-file tree against both accepted executable inputs and independently
+verified successful full-run evidence,
 including file identities and modes, requires unchanged accepted policy, and
 allows only content changes to existing allowlisted files. It requires the same
 immutable wrapper and full workflow revision, caller path, successful full job
-and aggregate, including exact run ID, attempt and job head SHA. Prior docs-only results are not executable evidence. Unmerged code can introduce document dependencies, so a mixed PR must run full even when its previous code checkpoint passed. Candidates
+and aggregate, including exact run ID, attempt and job head SHA. Prior docs-only
+results are not executable evidence. Unmerged code can introduce document
+dependencies, so a mixed PR must run full even when its previous code checkpoint
+passed. Candidates
 are bounded to recent successful runs on the default branch or the same PR and
 accepted base. Inaccessible, incomplete or ambiguous evidence selects full.
 Manual dispatch and merge-group always select full. No artifacts or executable
@@ -129,4 +133,6 @@ The docs job independently proves the selected checkout and records the full
 evidence revision/run. The aggregate accepts exactly the selected successful
 lane and the other skipped lane. A failed or skipped selected lane cannot pass.
 All API access uses the read-only caller token; no caller-supplied command or
-classifier is executed.
+classifier is executed. The credential-bearing classifier runs Python in
+isolated mode and reads policy from exact tracked Git objects, not importable
+modules or transformed working-tree files.

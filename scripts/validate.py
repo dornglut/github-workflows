@@ -1168,8 +1168,8 @@ def main() -> int:
             validate_text_file(path, failures)
 
     validate_workflows(failures)
-    from test_change_aware import validate_change_aware
-    validate_change_aware(ROOT, failures)
+    import runpy
+    runpy.run_path(str(ROOT / "scripts/test_change_aware.py"))["validate_change_aware"](ROOT, failures)
     validate_dependabot(failures)
     validate_documented_contract(failures)
 

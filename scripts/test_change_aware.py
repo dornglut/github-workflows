@@ -22,7 +22,7 @@ def validate_change_aware(root, failures):
         assert not diff(old, {**new, "extra.md": changed}, allowed)
         assert not diff(old, {**old, "README.md": symlink}, allowed)
         assert not diff(old, {**old, "README.md": ("100755", "blob", "a" * 40)}, allowed)
-        for raw in (b"README.md", b"*.md\n", b"../README.md\n", b"README.md\nREADME.md\n", b"src/main.rs\n"):
+        for raw in (b"README.md", b"*.md\n", b"../README.md\n", b"README.md\nREADME.md\n", b"src/main.rs\n", b"README.md\r\n"):
             try:
                 ns["allowlist"](raw)
             except ValueError:
@@ -43,11 +43,15 @@ def validate_change_aware(root, failures):
             {"name": prefix + "Full validation / Repository baseline", "conclusion": "success"},
             {"name": prefix + "Repository baseline", "conclusion": "success"},
         ]
-        assert ns["full_jobs"](full)
-        assert not ns["full_jobs"](full[1:])
-        assert not ns["full_jobs"]([{**full[0], "conclusion": "skipped"}, *full[1:]])
-        assert not ns["full_jobs"]([{**full[0], "steps": []}, *full[1:]])
-        assert not ns["full_jobs"]([*full, full[0]])
+        job_run = {"head_sha": "d" * 40, "id": 1, "run_attempt": 1}
+        full = [{**job, "head_sha": job_run["head_sha"], "run_id": 1, "run_attempt": 1} for job in full]
+        assert ns["full_jobs"](full, job_run)
+        assert not ns["full_jobs"](full[1:], job_run)
+        assert not ns["full_jobs"]([{**full[0], "conclusion": "skipped"}, *full[1:]], job_run)
+        assert not ns["full_jobs"]([{**full[0], "steps": []}, *full[1:]], job_run)
+        assert not ns["full_jobs"]([*full, full[0]], job_run)
+        assert not ns["full_jobs"]([{**full[0], "head_sha": "f" * 40}, *full[1:]], job_run)
+        assert not ns["full_jobs"](full, {**job_run, "run_attempt": 2})
         pin = "c" * 40
         repo = "example/repo"
         run = {

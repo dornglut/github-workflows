@@ -69,6 +69,56 @@ def validate_change_aware(root, failures):
         assert not ns["run_matches"]({**run, "head_branch": "other"}, *args)
         assert not ns["run_matches"]({**run, "head_repository": {"full_name": "other/repo"}}, *args)
         assert not ns["run_matches"]({**run, "event": "pull_request"}, *args)
+        # Drive the actual planner against synthetic, exact revision-bound API data.
+        accepted_sha = "e" * 40
+        current_sha = "f" * 40
+        base_tree_sha = "1" * 40
+        accepted = {
+            **old, ns["ALLOWLIST"]: regular, ns["CALLER"]: regular,
+        }
+        current = {**accepted, "README.md": changed}
+        doc_event = {
+            "repository": {"full_name": repo, "default_branch": "main"},
+            "number": 42,
+            "pull_request": {
+                "base": {"sha": accepted_sha, "ref": "main"},
+                "head": {"ref": "feature", "repo": {"full_name": repo}},
+            },
+        }
+        run = {**run, "head_sha": accepted_sha}
+        full = [{**job, "head_sha": accepted_sha} for job in full]
+        def tree_data(entries):
+            return {
+                "sha": base_tree_sha, "truncated": False,
+                "tree": [
+                    {"path": path, "mode": mode, "type": kind, "sha": oid}
+                    for path, (mode, kind, oid) in entries.items()
+                ],
+            }
+
+        replies = {
+            "git/commits/" + accepted_sha: {"sha": accepted_sha, "tree": {"sha": base_tree_sha}},
+            "git/trees/" + base_tree_sha + "?recursive=1": tree_data(accepted),
+            "actions/workflows/validation.yml/runs?status=success&per_page=20": {"workflow_runs": [run]},
+            "actions/runs/1": run,
+            "actions/runs/1/attempts/1/jobs?per_page=100": {"jobs": full, "total_count": len(full)},
+        }
+        documents = {
+            ns["ALLOWLIST"]: b"README.md\n",
+            ns["CALLER"]: ("    uses: " + ns["WRAPPER"] + "@" + pin + "\n").encode(),
+        }
+        choose = ns["choose"]
+        def select(tree, event_name="pull_request", api=None):
+            return choose(event_name, doc_event, current_sha, api or replies.__getitem__, documents.__getitem__, tree)
+
+        assert select(current) == (accepted_sha, 1)
+        assert select({**current, "src/main.rs": changed}) is None
+        assert select(current, "workflow_dispatch") is None
+        assert select(current, "merge_group") is None
+        replies["actions/runs/1/attempts/1/jobs?per_page=100"] = {"jobs": full[1:], "total_count": len(full) - 1}
+        assert select(current) is None
+        replies["actions/runs/1/attempts/1/jobs?per_page=100"] = {"jobs": full, "total_count": len(full) + 1}
+        assert select(current) is None
         for required in (
             "needs: [plan, full, docs]", "if: always()", "name: Repository baseline",
             '[[ "$PLAN" == success ]]', '[[ "$FULL" == success && "$DOCS" == skipped ]]',

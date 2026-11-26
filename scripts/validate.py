@@ -29,6 +29,7 @@ SELF_WORKFLOW = WORKFLOW_DIR / "validate.yml"
 EXPECTED_WORKFLOW_FILES = {
     "reusable-python-repository-validate.yml",
     "reusable-rust-cargo-validate.yml",
+    "reusable-rust-change-aware.yml",
     "validate.yml",
 }
 
@@ -197,6 +198,8 @@ def validate_action_reference(path_text: str, line: str, failures: list[str]) ->
             return
 
     if reference.startswith("./"):
+        if reference == "./.github/workflows/reusable-rust-cargo-validate.yml" and path_text == ".github/workflows/reusable-rust-change-aware.yml" and comment is None:
+            return
         if reference != "./.github/workflows/reusable-python-repository-validate.yml":
             fail(f"{path_text}: unexpected local workflow reference {reference!r}", failures)
         if path_text != ".github/workflows/validate.yml":
@@ -281,7 +284,7 @@ def validate_workflow_baseline(path: Path, failures: list[str]) -> str | None:
     )
     persist_false_count = text.count("persist-credentials: false")
     if path.name.startswith("reusable-"):
-        expected_checkout_count = 2 if path == RUST_WORKFLOW else 1
+        expected_checkout_count = 2 if path.name in {RUST_WORKFLOW.name, "reusable-rust-change-aware.yml"} else 1
         if checkout_count != expected_checkout_count:
             fail(
                 f"{path_text}: reusable profile must have exactly "
@@ -1165,6 +1168,8 @@ def main() -> int:
             validate_text_file(path, failures)
 
     validate_workflows(failures)
+    import runpy
+    runpy.run_path(str(ROOT / "scripts/test_change_aware.py"))["validate_change_aware"](ROOT, failures)
     validate_dependabot(failures)
     validate_documented_contract(failures)
 

@@ -63,6 +63,9 @@ jobs:
           SHA = re.compile(r"[0-9a-f]{40}")
           DOC = re.compile(r"(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.md")
           ALLOWLIST = "validation-docs.txt"
+          NAMESPACE_POLICY = "validation-docs-policy.txt"
+          NAMESPACE_MARKER = b"markdown-namespaces-v1\n"
+          REGULAR = ("100644", "blob")
           CALLER = ".github/workflows/validation.yml"
           PARTITIONS = "validation-partitions.txt"
           WRAPPER = "dornglut/github-workflows/.github/workflows/reusable-rust-change-aware.yml"
@@ -87,27 +90,91 @@ jobs:
               return frozenset(paths)
 
 
-          def eligible_difference(previous, current, paths):
-              # Each entry is (mode, type, object SHA). Directories are implicit.
-              if previous.keys() != current.keys():
+          def namespace_path(path):
+              parts = path.split("/")
+              if len(path) > 512 or (len(parts) > 1 and parts[0] != "docs"):
                   return False
-              changes = {p for p in current if current[p] != previous[p]}
-              return bool(changes) and changes <= paths and all(
-                  previous[p][:2] == current[p][:2] == ("100644", "blob")
+              if not DOC.fullmatch(path) or ".." in path:
+                  return False
+              reserved = {"CON", "PRN", "AUX", "NUL"}
+              reserved.update(f"{prefix}{n}" for prefix in ("COM", "LPT") for n in range(1, 10))
+              return all(
+                  len(part) <= 128 and not part.startswith(".")
+                  and part.split(".", 1)[0].upper() not in reserved
+                  for part in parts
+              ) and len(parts[-1]) > 3
+
+
+          def directory_paths(entries):
+              return {
+                  "/".join(parts[:index])
+                  for path in entries
+                  for parts in (path.split("/"),)
+                  for index in range(1, len(parts))
+              }
+
+
+          def unambiguous_tree(entries):
+              # Reject case collisions (including directory components) and
+              # impossible leaf/ancestor combinations, even on a Linux runner.
+              directories = directory_paths(entries)
+              if directories & entries.keys():
+                  return False
+              names = directories | entries.keys()
+              return len({path.casefold() for path in names}) == len(names)
+
+
+          def eligible_difference(previous, current, paths):
+              # Explicit inventory compatibility: only existing file edits.
+              if paths is not None:
+                  if previous.keys() != current.keys():
+                      return False
+                  changes = {p for p in current if current[p] != previous[p]}
+                  return bool(changes) and changes <= paths and all(
+                      previous[p][:2] == current[p][:2] == REGULAR
+                      for p in changes
+                  )
+
+              # Namespace policy: additions and deletions are leaf differences.
+              # Every changed present side must be a regular Markdown blob.
+              if not unambiguous_tree(previous) or not unambiguous_tree(current):
+                  return False
+              union = previous.keys() | current.keys()
+              if directory_paths(union) & union:
+                  return False
+              changes = {p for p in union if previous.get(p) != current.get(p)}
+              return bool(changes) and all(
+                  namespace_path(p) and all(
+                      tree[p][:2] == REGULAR for tree in (previous, current) if p in tree
+                  )
                   for p in changes
               )
 
 
-          def trusted_policy(accepted, current, paths):
+          def policy_path(accepted, current):
               if PARTITIONS in accepted or PARTITIONS in current:
-                  return False
-              for p in (ALLOWLIST, CALLER):
+                  return None
+              selected = [p for p in (ALLOWLIST, NAMESPACE_POLICY) if p in accepted]
+              if len(selected) != 1 or selected != [
+                  p for p in (ALLOWLIST, NAMESPACE_POLICY) if p in current
+              ]:
+                  return None
+              for p in (selected[0], CALLER):
                   if p not in accepted or accepted[p] != current.get(p):
-                      return False
-                  if accepted[p][:2] != ("100644", "blob"):
-                      return False
+                      return None
+                  if accepted[p][:2] != REGULAR:
+                      return None
+              return selected[0]
+
+
+          def trusted_policy(accepted, current, paths):
+              expected = NAMESPACE_POLICY if paths is None else ALLOWLIST
+              if policy_path(accepted, current) != expected:
+                  return False
+              if paths is None:
+                  return True
               return all(
-                  accepted.get(p, ())[:2] == current.get(p, ())[:2] == ("100644", "blob")
+                  accepted.get(p, ())[:2] == current.get(p, ())[:2] == REGULAR
                   for p in paths
               )
 
@@ -200,9 +267,16 @@ jobs:
                   return entries
 
               baseline = tree(accepted)
-              if ALLOWLIST not in baseline or baseline[ALLOWLIST] != current_tree.get(ALLOWLIST):
+              policy = policy_path(baseline, current_tree)
+              if policy is None:
                   return None
-              paths = allowlist(read(ALLOWLIST))
+              raw_policy = read(policy)
+              if policy == NAMESPACE_POLICY:
+                  if raw_policy != NAMESPACE_MARKER:
+                      return None
+                  paths = None
+              else:
+                  paths = allowlist(raw_policy)
               if not trusted_policy(baseline, current_tree, paths):
                   return None
               # Accepted allowlists do not certify new, unmerged code inputs.
